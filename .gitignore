@@ -1,0 +1,5 @@
+# The phone's log and probe output name the phone's owner.
+logs/
+build/
+*.ipa
+__pycache__/
