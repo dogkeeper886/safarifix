@@ -12,6 +12,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
@@ -39,7 +40,8 @@ type Authority struct {
 
 // Load reads the root certificate and key from dir, or makes and saves them there.
 func Load(dir string) (*Authority, error) {
-	certPath, keyPath := filepath.Join(dir, "root.pem"), filepath.Join(dir, "root-key.pem")
+	// root.pem held roots in Go's own encoding; the new name makes a root in mitmproxy's (see makeRoot).
+	certPath, keyPath := filepath.Join(dir, "root2.pem"), filepath.Join(dir, "root2-key.pem")
 	der, key, err := read(certPath, keyPath)
 	if os.IsNotExist(err) {
 		der, key, err = makeRoot()
@@ -97,10 +99,22 @@ func (a *Authority) For(host string) (*tls.Certificate, error) {
 	return cert, nil
 }
 
-// makeRoot makes a root with the layout of mitmproxy's, which iOS 10 trusts: an RSA key, no path length, and server
-// authentication. iOS 10 refused Go's first roots even with their switches on in Certificate Trust Settings
-// (2026-10-25), likely a decision the phone had cached rather than the layout, but this one is the known-good
-// layout. Making the RSA key takes a while on the iPhone 5, once.
+var (
+	oidBasicConstraints = asn1.ObjectIdentifier{2, 5, 29, 19}
+	oidExtKeyUsage      = asn1.ObjectIdentifier{2, 5, 29, 37}
+	oidKeyUsage         = asn1.ObjectIdentifier{2, 5, 29, 15}
+	oidSubjectKeyID     = asn1.ObjectIdentifier{2, 5, 29, 14}
+	oidCommonName       = asn1.ObjectIdentifier{2, 5, 4, 3}
+	oidOrganization     = asn1.ObjectIdentifier{2, 5, 4, 10}
+	oidServerAuth       = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 3, 1}
+)
+
+// makeRoot makes a root that copies mitmproxy's, which iOS 10 trusts, down to the order and string types of its
+// fields: an RSA key, a 20-byte serial, the name as UTF8String common name then organization, and the extensions
+// Basic Constraints, Extended Key Usage (server authentication), Key Usage, Subject Key ID, in that order. Roots in
+// Go's own encoding failed on the iPhone 5 too, but so did this one until its switch in Certificate Trust Settings
+// was on (2026-10-25), so the switch, not the encoding, was likely the cause; the copy stays as a precaution.
+// Making the RSA key takes a few seconds on the iPhone 5, once.
 func makeRoot() ([]byte, crypto.Signer, error) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -111,20 +125,38 @@ func makeRoot() ([]byte, crypto.Signer, error) {
 		return nil, nil, err
 	}
 	keyID := sha1.Sum(publicKey)
+	// The suffix tells one install's root from another's in Certificate Trust Settings.
+	name := "SafariFix root " + hex.EncodeToString(keyID[:3])
+	utf8 := func(s string) asn1.RawValue { return asn1.RawValue{Tag: asn1.TagUTF8String, Bytes: []byte(s)} }
+	subject, err := asn1.Marshal(pkix.RDNSequence{
+		{{Type: oidCommonName, Value: utf8(name)}},
+		{{Type: oidOrganization, Value: utf8("SafariFix")}},
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	basicConstraints, _ := asn1.Marshal(struct{ IsCA bool }{true})
+	extKeyUsage, _ := asn1.Marshal([]asn1.ObjectIdentifier{oidServerAuth})
+	// Certificate Sign and CRL Sign, bits 5 and 6.
+	keyUsage, _ := asn1.Marshal(asn1.BitString{Bytes: []byte{0x06}, BitLength: 7})
+	subjectKeyID, _ := asn1.Marshal(keyID[:])
 	now := time.Now()
+	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 159))
+	if err != nil {
+		return nil, nil, err
+	}
 	template := &x509.Certificate{
-		SerialNumber: serial(),
-		// The suffix tells one install's root from another's in Certificate Trust Settings.
-		Subject:               pkix.Name{CommonName: "SafariFix root " + hex.EncodeToString(keyID[:3]), Organization: []string{"SafariFix"}},
-		NotBefore:             now.Add(-24 * time.Hour),
-		NotAfter:              now.Add(10 * 365 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-		MaxPathLen:            -1,
-		// Go 1.14 doesn't add the key ID itself; site certificates copy it as their authority key ID.
-		SubjectKeyId: keyID[:],
+		SerialNumber: serialNumber,
+		RawSubject:   subject,
+		NotBefore:    now.Add(-24 * time.Hour),
+		NotAfter:     now.Add(10 * 365 * 24 * time.Hour),
+		// With every extension here, Go adds none of its own, so their order stays as written.
+		ExtraExtensions: []pkix.Extension{
+			{Id: oidBasicConstraints, Critical: true, Value: basicConstraints},
+			{Id: oidExtKeyUsage, Value: extKeyUsage},
+			{Id: oidKeyUsage, Critical: true, Value: keyUsage},
+			{Id: oidSubjectKeyID, Value: subjectKeyID},
+		},
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
 	return der, key, err

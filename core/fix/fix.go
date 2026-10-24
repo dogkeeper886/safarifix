@@ -34,13 +34,14 @@ var (
 
 // Fixer rewrites scripts with esbuild, caching each result on disk by the script's hash.
 type Fixer struct {
+	// First, so the 64-bit counters are 8-byte aligned, which atomic needs on 32-bit ARM.
+	rewritten, failed, cached int64
+
 	cacheDir string
 	// esbuild runs at most this many at once; the iPhone 5 has two cores.
 	limit chan struct{}
 	// Log, when set, gets one line per rewrite.
 	Log func(format string, args ...interface{})
-
-	rewritten, failed, cached int64
 }
 
 // New returns a Fixer that caches in cacheDir.
