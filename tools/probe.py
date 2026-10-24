@@ -6,9 +6,11 @@ the failed requests, the console errors and a snapshot of the page.
   tools/iphone.sh python3 tools/probe.py --wait 3 --eval EXPR        the open page, without navigating
 Start the proxy first with tools/inspect.sh start, and keep Safari open in front on the phone."""
 import argparse
+import base64
 import json
 import re
 import time
+import urllib.parse
 import urllib.request
 from collections import Counter
 
@@ -135,6 +137,22 @@ def snapshot(tab):
         return {'error': value}
 
 
+def save_shot(tab, path):
+    """Saves the visible part of the page as a PNG, rendered by Safari; Safari's own buttons aren't in it."""
+    size = tab.evaluate('JSON.stringify([innerWidth, innerHeight])')
+    try:
+        width, height = json.loads(size)
+    except (TypeError, ValueError):
+        return f'no picture: {size}'
+    r = tab.call('Page.snapshotRect', x=0, y=0, width=width, height=height, coordinateSystem='Viewport')
+    url = r.get('result', {}).get('dataURL', '')
+    if not url.startswith('data:image/png;base64,'):
+        return f'no picture: {r.get("error", r)}'
+    with open(path, 'wb') as f:
+        f.write(base64.b64decode(url.split(',', 1)[1]))
+    return f'{width}x{height} saved to {path}'
+
+
 def print_details(requests, status, failed, console, page, list_all):
     print(f'== requests: {len(requests)}, statuses: {dict(Counter(status.values()))}, failed loads: {len(failed)}')
     for rid, err, canceled in failed[:25]:
@@ -175,19 +193,33 @@ def main():
     p.add_argument('--summary', action='store_true', help='print a short block per site')
     p.add_argument('--eval', action='append', default=[], help='expression to evaluate on each page at the end')
     p.add_argument('--all', action='store_true', help='list every request, not only the failed ones')
+    p.add_argument('--shot', help='save a picture of the page at the end to this PNG file (of the last page, given several URLs)')
+    p.add_argument('--then', help='expression to run once the page has loaded, such as filling and submitting a form')
+    p.add_argument('--then-wait', type=float, default=15, help='seconds to keep watching after --then (default 15)')
+    p.add_argument('--match', help='print the full, decoded URL of each request matching this regular expression')
     p.add_argument('--ws', help='the tab\'s WebSocket URL (default: the first tab on localhost:9222)')
     a = p.parse_args()
 
     tab = Tab(a.ws or first_tab_ws())
     for url in a.urls or [None]:
-        parsed = parse(tab.watch(url, a.wait))
+        events = tab.watch(url, a.wait)
+        if a.then:
+            print('== then:', tab.evaluate(a.then))
+            events += tab.watch(None, a.then_wait)
+        parsed = parse(events)
         page = snapshot(tab)
+        if a.match:
+            for _, request_url in parsed[0].values():
+                if re.search(a.match, request_url):
+                    print('== match:', urllib.parse.unquote(request_url))
         if a.summary:
             print_summary(url or page.get('href', '?'), *parsed, page)
         else:
             print_details(*parsed, page, a.all)
         for expr in a.eval:
             print(f'  {short(expr, 50)} => {tab.evaluate(expr)}')
+    if a.shot:
+        print('== picture:', save_shot(tab, a.shot))
 
 
 if __name__ == '__main__':

@@ -26,7 +26,8 @@ TLS is not the blocker. Of about 700 requests across the sites below, none faile
 | 2026-10-24 | google.com search | Works: results and the AI overview | |
 | 2026-10-24 | m.youtube.com search | Works | |
 | 2026-10-24 | m.youtube.com watch | Plays at 360p (640x360, format 18), muted until tapped | |
-| 2026-10-24 | accounts.google.com | The email page loads; sign-in fails after the email is entered (the user's report; Google's message wasn't captured) | |
+| 2026-10-24 | accounts.google.com | The email page loads; after the email it says "發生問題 / 很抱歉，出了點小狀況" (Something went wrong) | Missing API: the sign-in script calls `AbortController` |
+| 2026-10-24 | accounts.google.com, with an `AbortController` polyfill (`tools/google-signin.py`) | Signs in: email, CAPTCHA, password, a device prompt and an identity check, then m.youtube.com signed in | |
 | 2026-10-24 | zh.wikipedia.org | Works | |
 | 2026-10-24 | github.com | Works | |
 | 2026-10-24 | facebook.com | The login page shows | |
@@ -60,7 +61,7 @@ What the same Safari did on 2026-10-24 through the PC test bench, `bench/run.sh`
 - **esbuild:** 0.28.2 refuses `ios10.3` for `let`, `const` and destructuring inside them. `--supported:const-and-let=true --supported:destructuring=true` keeps them as they are, and Safari 10.1 runs them.
 - **esbuild's limits:** it can't lower top-level `await`, and it turns regex syntax Safari 10.1 lacks, such as named groups, into `new RegExp(...)` calls that still throw when they run.
 - **Trust:** Safari trusts a profile's root certificate only after its switch is on in Settings → General → About → Certificate Trust Settings; until then loads fail with `-9813` and `-1202`.
-- **Sign-in:** Google rejects Safari 10.1 after the email, so the proxy may have to handle accounts.google.com instead of passing it through.
+- **Sign-in:** Google doesn't reject Safari 10.1; its sign-in script crashes on the missing `AbortController`, which its error reports to `/v3/signin/_/AccountsSignInUi/jserror` name. The proxy must add an `AbortController` polyfill to accounts.google.com's pages, under the page's own CSP nonce, instead of passing them through untouched; their scripts are already ES5.
 - **The phone's own services:** iOS sends its system traffic through the WiFi proxy too. Trusting a developer failed with "needs internet" while the bench decrypted ppq.apple.com; apple.com, icloud.com and mzstatic.com must pass through untouched.
 
 ## esbuild on the phone
@@ -75,6 +76,15 @@ The build test, `spike/esbuild-ios/build.sh`, built esbuild v0.28.2 with Go 1.14
 - **Go:** 1.14 is the last release with darwin/arm, the 32-bit iPhone target; esbuild keeps Go 1.13 support on purpose.
 - **x/sys:** esbuild's pinned golang.org/x/sys lacks darwin/arm. The build replaces it with `v0.0.0-20210216163648-f7da38b97c65`, the last version whose darwin/arm code compiles.
 - **Library, not a program:** an iOS app can't start another process, so esbuild links into the app as a Go c-archive, 20 MB, with an 11.6 MB app binary.
+
+## A proxy on the phone
+
+The proxy test, `spike/proxy-ios/build.sh`, ran a pass-through proxy on 127.0.0.1:8118 in a free-signed app, with Settings → Wi-Fi → HTTP Proxy → Auto at `http://127.0.0.1:8118/proxy.pac`, on 2026-10-24.
+
+- **Routing:** Safari fetched the PAC file from the app and tunnelled every page through it; 5 sites loaded with 0 failed requests.
+- **Background:** a looping silent sound, with the audio background mode, kept the app running behind Safari. Over 10 minutes it logged all 20 heartbeats, each saying "background time unlimited", in 5 to 6 MB.
+- **System traffic:** push.apple.com, itunes.apple.com and certificate checks went through the app too.
+- **Untested:** a locked screen, runs of hours, calls interrupting the audio, and Safari while the app isn't running.
 
 ## Error map
 
