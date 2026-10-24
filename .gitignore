@@ -3,3 +3,5 @@ logs/
 build/
 *.ipa
 __pycache__/
+core/fix/polyfills_gen.go
+core/proxy/roots_gen.go
