@@ -26,8 +26,7 @@ Study a site's failure in the iPhone 5's Safari:
 14. Drive a form with `--then` and made-up details, such as `test@example.com`, to reproduce a failure without the user's account.
 15. Look for TLS failures with `tools/inspect.sh log | grep -E 'kCFStreamErrorDomainSSL|SecTrust|-98[0-9]{2}'`.
 16. Restart the recorder with `tools/inspect.sh start` when the log's newest line, `tools/inspect.sh log | tail -1`, lags the clock, since the phone's log stream can stall without an error.
-17. Sort each failure into its layer, TLS, syntax, missing API, browser check or blocked request, with the error map in `reference/findings.md`.
-18. Compare the result with the baseline in `reference/findings.md`, and add a dated row when a site's result changes.
-19. Ask the user to type passwords and sign-in details on the phone themselves, and read only the page that follows, never a field's value.
-20. Keep the phone's log and its device name out of commits and the chat, since both name the phone's owner.
-21. Stop the background containers with `tools/inspect.sh stop` when the study ends.
+17. Sort each failure into its layer: TLS, syntax, missing API, browser check or blocked request.
+18. Ask the user to type passwords and sign-in details on the phone themselves, and read only the page that follows, never a field's value.
+19. Keep the phone's log and its device name out of commits and the chat, since both name the phone's owner.
+20. Stop the background containers with `tools/inspect.sh stop` when the study ends.
