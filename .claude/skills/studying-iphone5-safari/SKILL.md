@@ -22,8 +22,8 @@ Study a site's failure in the iPhone 5's Safari:
 10. Probe several sites with `tools/iphone.sh python3 tools/probe.py --summary <url> ...`, a short block per site.
 11. Test a web API on the page with `--eval 'typeof IntersectionObserver'`.
 12. Look for TLS failures with `tools/inspect.sh log | grep -E 'kCFStreamErrorDomainSSL|SecTrust|-98[0-9]{2}'`.
-13. Sort each failure into its layer, TLS, syntax, missing API, browser check or blocked request, with the error map in `reference/findings.md`.
-14. Compare the result with the baseline in `reference/findings.md`, and add a dated row when a site's result changes.
+13. Restart the recorder with `tools/inspect.sh start` when the log's newest line, `tools/inspect.sh log | tail -1`, lags the clock, since the phone's log stream can stall without an error.
+14. Sort each failure into its layer: TLS, syntax, missing API, browser check or blocked request.
 15. Ask the user to type passwords and sign-in details on the phone themselves, and read only the page that follows, never a field's value.
 16. Keep the phone's log and its device name out of commits and the chat, since both name the phone's owner.
 17. Stop the background containers with `tools/inspect.sh stop` when the study ends.

@@ -22,7 +22,9 @@ fi
 "$RUNTIME" build -q -t safarifix-bench . >/dev/null
 
 # Google and YouTube work in the stock Safari; tunnel them untouched, so the bench can't break them or the sign-in.
-IGNORE='^(.+\.)?(google|youtube|googlevideo|gstatic|ytimg|ggpht|googleapis|googleusercontent|googlesyndication|doubleclick|youtube-nocookie)\.(com|com\.tw|net)(:[0-9]+)?$'
+# The phone's own services use the WiFi proxy too, and reject the bench's certificate: trusting a developer
+# fails with "needs internet" until apple.com passes through.
+IGNORE='^(.+\.)?(google|youtube|googlevideo|gstatic|ytimg|ggpht|googleapis|googleusercontent|googlesyndication|doubleclick|youtube-nocookie|apple|icloud|mzstatic)\.(com|com\.tw|net)(:[0-9]+)?$'
 
 echo "Bench on port $PORT; this PC's addresses: $(hostname -I 2>/dev/null || true). Ctrl-C to stop."
 # The image's entrypoint runs mitmproxy as the owner of the mounted certificate folder.
