@@ -187,7 +187,7 @@ def main():
         else:
             print_details(*parsed, page, a.all)
         for expr in a.eval:
-            print(f'  {expr}: {tab.evaluate(expr)}')
+            print(f'  {short(expr, 50)} => {tab.evaluate(expr)}')
 
 
 if __name__ == '__main__':
