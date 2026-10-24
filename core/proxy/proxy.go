@@ -41,13 +41,16 @@ type Stats struct {
 
 // Proxy serves Safari.
 type Proxy struct {
+	// First, so its 64-bit counters are 8-byte aligned, which atomic needs on 32-bit ARM: the iPhone 5 crashes
+	// at address 0x4 otherwise.
+	stats Stats
+
 	auth     *certs.Authority
 	fixer    *fix.Fixer
 	upstream *http.Transport
 	// WebSockets need HTTP/1.1, which upstream may not pick.
 	upgrades *http.Transport
 	logf     func(format string, args ...interface{})
-	stats    Stats
 }
 
 // New returns a proxy that signs site certificates with auth and rewrites pages with fixer. roots verifies the

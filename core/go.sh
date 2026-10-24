@@ -3,6 +3,8 @@
 # and proxy/roots_gen.go from curl's Mozilla roots. Downloads both and Go itself on first use.
 #   core/go.sh test ./...
 #   core/go.sh run ./cmd/safarifix-pc        the core on the PC, for the iPhone to use over the WiFi
+#   GOARCH=386 CGO_ENABLED=0 core/go.sh test ./certs ./fix ./proxy ./rules
+#                                            the tests on 32 bits, which catch what crashes the iPhone 5
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source tools/deps.sh

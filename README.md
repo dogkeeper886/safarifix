@@ -2,7 +2,25 @@
 
 An iPhone 5 stops at iOS 10.3.4, and its Safari 10.1 still searches Google and plays YouTube. Many other sites now send JavaScript newer than Safari 10.1 can parse, or call web APIs it lacks. Their pages stay blank or half-working, and the phone gets no newer Safari.
 
-SafariFix fixes each page on its way to Safari: a proxy rewrites the new syntax into what Safari 10.1 reads, adds the missing APIs, and passes Google, YouTube and Apple through untouched. Today the proxy runs on a Linux PC as a test bench. SafariFix aims to move it into an app that runs on the phone alone, signed with a free Apple ID as [CleanCam](https://github.com/dogkeeper886/cleancam) is, and two test apps now try its parts there.
+SafariFix fixes each page on its way to Safari: a proxy rewrites the new syntax into what Safari 10.1 reads, adds the missing APIs, and passes Google, YouTube and Apple through untouched. The proxy runs in the SafariFix app on the phone alone, signed with a free Apple ID as [CleanCam](https://github.com/dogkeeper886/cleancam) is. A test bench on a Linux PC and two test apps came first.
+
+## The SafariFix app
+
+The app runs the proxy on `127.0.0.1:8118`, and Safari reaches it through a PAC file. The proxy is `core/`, in Go 1.14, the last Go for 32-bit iPhones, built into the app as a C library; `ios/app/` wraps it in an Objective-C app that plays a silent sound to keep running behind Safari. It passes Google search, YouTube and Apple's services through untouched, adds only `AbortController` to Google's sign-in pages, and rewrites every other site's scripts with esbuild on the phone.
+
+### Set up the app
+
+1. **Build the IPA** on the Linux PC with `ios/build.sh`, which writes `build/SafariFix.ipa`. It needs podman or docker, curl, git and zip, and downloads its pinned Go, esbuild, SDK, toolchain and polyfills into `build/` on the first run.
+2. **Sign and install** it as the test apps below, with `build/SafariFix.ipa` in step 3.
+3. **Open SafariFix.** The first launch makes the root certificate, and the app shows its name, "SafariFix root" and six hex digits, once the proxy listens.
+4. **Point Safari at it** in Settings → Wi-Fi → (i) → HTTP Proxy → Auto, with the URL `http://127.0.0.1:8118/proxy.pac`.
+5. **Install the root certificate:** tap "Open the setup page in Safari", then "Install the root certificate", Allow and Install.
+6. **Trust it** in Settings → General → About → Certificate Trust Settings: turn on the SafariFix root, and tap Continue on the warning. Until its switch is on, Safari can't open any site the app fixes.
+
+- **Keep it running:** in the app switcher, swipe away only Safari, never SafariFix. While SafariFix isn't running, Safari reaches the internet directly through the PAC file's fallback, with pages unfixed.
+- **Renew:** a free Apple ID signs the app for 7 days. Repeat step 2 with the same IPA; the root certificate and its trust stay.
+- **The app's log:** read it with `tools/inspect.sh log | grep SafariFix`, from [Measure a page on the phone](#measure-a-page-on-the-phone). A 30-second heartbeat shows the app running; after a crash, the next launch logs Go's last words as "last run's stderr".
+- **Change the core:** `core/go.sh test ./...` runs its tests, and `GOARCH=386 CGO_ENABLED=0 core/go.sh test ./certs ./fix ./proxy ./rules` runs them on 32 bits, which catches what crashes the iPhone 5. `core/go.sh run ./cmd/safarifix-pc` runs the same proxy on the PC for the phone to use over the Wi-Fi.
 
 ## The PC bench
 
@@ -26,9 +44,9 @@ The bench fixes each page while the iPhone loads it: the iPhone uses the bench, 
 
 - **Syntax esbuild leaves broken:** a script with top-level `await` reaches Safari unchanged, and named regex groups and BigInt become calls that still throw.
 - **Browser checks and blocked requests:** a site refuses Safari 10.1 by its user agent, or its servers refuse this browser's cross-origin requests.
-- **Google's sign-in:** Google's sign-in script calls `AbortController`, which Safari 10.1 lacks, and the bench passes Google untouched. Until the app adds it, `tools/google-signin.py` keeps an `AbortController` polyfill in Safari's tab over USB while the user signs in.
+- **Google's sign-in:** Google's sign-in script calls `AbortController`, which Safari 10.1 lacks, and the bench passes Google untouched. The app adds it; with the bench, `tools/google-signin.py` keeps an `AbortController` polyfill in Safari's tab over USB while the user signs in.
 
-## The app on the phone
+## The test apps
 
 The bench works only while the PC runs and the phone shares its Wi-Fi. A phone that browses on its own needs the proxy inside an app. But iOS keeps an app from starting another program and suspends it in the background, and Apple's current tools build iOS apps for 64-bit iPhones only. Two test apps, built on the Linux PC, try the parts on the iPhone 5:
 
