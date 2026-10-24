@@ -61,6 +61,20 @@ What the same Safari did on 2026-10-24 through the PC test bench, `bench/run.sh`
 - **esbuild's limits:** it can't lower top-level `await`, and it turns regex syntax Safari 10.1 lacks, such as named groups, into `new RegExp(...)` calls that still throw when they run.
 - **Trust:** Safari trusts a profile's root certificate only after its switch is on in Settings → General → About → Certificate Trust Settings; until then loads fail with `-9813` and `-1202`.
 - **Sign-in:** Google rejects Safari 10.1 after the email, so the proxy may have to handle accounts.google.com instead of passing it through.
+- **The phone's own services:** iOS sends its system traffic through the WiFi proxy too. Trusting a developer failed with "needs internet" while the bench decrypted ppq.apple.com; apple.com, icloud.com and mzstatic.com must pass through untouched.
+
+## esbuild on the phone
+
+The build test, `spike/esbuild-ios/build.sh`, built esbuild v0.28.2 with Go 1.14.15 into a test app, and timed it on the iPhone 5 on 2026-10-24. Its output matched the bench's byte for byte, so it runs in Safari 10.1 as the bench's did.
+
+| Sample | Size in → out | Three runs |
+|---|---|---|
+| BBC News's main script, with 159 `?.` and 98 object spreads | 301 KB → 356 KB | 380, 371, 305 ms |
+| three.js 0.170.0, module build | 1.3 MB → 964 KB | 678, 684, 654 ms |
+
+- **Go:** 1.14 is the last release with darwin/arm, the 32-bit iPhone target; esbuild keeps Go 1.13 support on purpose.
+- **x/sys:** esbuild's pinned golang.org/x/sys lacks darwin/arm. The build replaces it with `v0.0.0-20210216163648-f7da38b97c65`, the last version whose darwin/arm code compiles.
+- **Library, not a program:** an iOS app can't start another process, so esbuild links into the app as a Go c-archive, 20 MB, with an 11.6 MB app binary.
 
 ## Error map
 
