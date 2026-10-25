@@ -10,7 +10,9 @@ The app runs the proxy on `127.0.0.1:8118`, and Safari reaches it through a PAC 
 
 ### Set up the app
 
-1. **Set up the PC** with `tools/phone/install.sh`, which needs podman or docker, usbmuxd, curl and tar. It downloads the pinned signer into `build/`, builds the phone tools' container image, and names what's left: plug the iPhone straight into the PC, since usbmuxd lists the phone only on a direct cable, unlock it and tap "Trust This Computer"; and log in to an Apple ID once, in your own terminal, with `tools/phone/plumesign.sh account login -u <your Apple ID>`, which asks for the password and the code. Run it again until it says "Ready".
+1. **Set up the PC** with `tools/phone/install.sh`, which needs podman or docker, usbmuxd, curl and tar. It downloads the pinned signer into `build/`, builds the phone tools' container image, and names what's left. Run it again until it says "Ready".
+   - **The iPhone:** plug it straight into the PC, since usbmuxd lists the phone only on a direct cable, then unlock it and tap "Trust This Computer".
+   - **An Apple ID:** log in once, in your own terminal, with `tools/phone/plumesign.sh account login -u <your Apple ID>`; it asks for the password and the code.
 2. **Build the IPA** on the Linux PC with `ios/build.sh`, which writes `build/SafariFix.ipa`. It needs podman or docker, curl, git, zip and python3, and downloads its pinned Go, esbuild, SDK, toolchain and polyfills into `build/` on the first run.
 3. **Sign and install** it from this repo's root:
    ```sh
@@ -32,11 +34,11 @@ To use Safari as well, take the two steps the screen lists under "To use Safari 
 - **Keep it running** for Safari: in the app switcher, swipe away only Safari, and leave SafariFix. While SafariFix is closed, Safari reaches the internet directly through the PAC file's fallback, and pages arrive unfixed.
 - **Renew:** a free Apple ID signs the app for 7 days, and the main screen shows the end date. Repeat step 3 with the same IPA; the root certificate, its trust and the browser's sign-ins stay.
 - **"Maximum number of apps":** a free Apple ID's profiles allow 3 apps at once, and an install past that fails with this message. Uninstall another app first: `tools/phone/iphone.sh ideviceinstaller -l` lists the bundle IDs, and `tools/phone/iphone.sh ideviceinstaller -U <bundle ID>` removes one, with its data. Keep SafariFix installed: uninstalling it deletes its root certificate and the browser's sign-ins.
-- **An app that won't open after install:** iOS checks the developer with Apple over the internet, and shows the untrusted-developer alert while that check fails or times out. Tap Verify App in Settings → General → Device Management again.
+- **An app that won't open after install:** iOS checks the developer with Apple over the internet, and shows the untrusted-developer alert while that check fails or times out. Tap "Verify App" in Settings → General → Device Management again.
 
 To work on the app:
 
-- **The app's log:** read it with `tools/phone/log.sh | grep SafariFix`, after `tools/phone/run.sh` from [The phone tools](#the-phone-tools). A 30-second heartbeat shows the app running; after a crash, the app logs Go's last words at its next launch, as "last run's stderr". Details, on the main screen, shows what the checks found and the debug record below; its "Copy" button copies both.
+- **The app's log:** start the [phone tools](#the-phone-tools) with `tools/phone/run.sh`, then read it with `tools/phone/log.sh | grep SafariFix`. A 30-second heartbeat shows the app running; after a crash, the app logs Go's last words at its next launch, as "last run's stderr". Details, on the main screen, shows what the checks found and the debug record below; its "Copy" button copies both.
 - **A debug build:** `DEBUG=1 ios/build.sh` writes `build/SafariFix-debug.ipa`, which also saves pictures of its main screen in each state into the debug record's folder, as `screen.png` and `state-ready.png` and so on.
 - **Change the core:** `core/go.sh test ./...` runs its tests, and `GOARCH=386 CGO_ENABLED=0 core/go.sh test ./certs ./fix ./proxy ./rules` runs them on 32 bits, which catches what crashes the iPhone 5. `core/go.sh run ./cmd/safarifix-pc` runs the same proxy on the PC for the phone to use over the Wi-Fi.
 
@@ -47,6 +49,37 @@ The record lists in time order the app's events, each page the browser opened wi
 1. **Start the phone tools** with `tools/phone/run.sh`, which also forwards the proxy's port over USB to `127.0.0.1:18118`.
 2. **Read the record** at `http://127.0.0.1:18118/debug/`: `log.txt` holds the timeline; `summary.txt` the counts; `core.txt` the core's log; and `previous.txt` the last run's timeline, to read after a crash. The proxy serves it only under `127.0.0.1` or `localhost`, which keeps a website from reading it under its own name.
 3. **Drive the browser** with the probe from [Measure a page on the phone](#measure-a-page-on-the-phone): once a page has loaded, `curl localhost:9222/json` lists its web view, and `tools/phone/iphone.sh python3 tools/phone/probe.py --ws ws://localhost:9222/devtools/page/<n> <url>` opens a URL in it.
+
+## The phone tools
+
+`tools/phone/` sets up the PC, signs apps onto the iPhone and studies it over USB. Its tools run in containers that reach the phone through the PC's usbmuxd: `iphone-tools` for libimobiledevice and the inspector, and Ubuntu 24.04 for the signer, which runs on the PC itself when the PC's glibc is new enough.
+
+| Script | What it does |
+|---|---|
+| `install.sh` | Sets up the PC once, then checks the iPhone and the Apple ID |
+| `build.sh` | Rebuilds the container image after a change to `image/` |
+| `run.sh` | Starts the inspector, the log recorder and the USB forward to the app's debug record |
+| `status.sh` | Shows what runs, the phone's iOS, its web pages and the debug record |
+| `log.sh` | Prints the phone's log since `run.sh` |
+| `stop.sh` | Stops what `run.sh` started |
+| `plumesign.sh` | Signs and installs an IPA with the signer that `pins.sh` pins |
+| `iphone.sh` | Runs one command in the container, such as `idevice_id -l` |
+| `probe.py` | Opens a page through the inspector and reports what it did |
+
+### Measure a page on the phone
+
+A page's failure shows only on the phone's screen, in a Safari older than any the PC runs. The phone tools drive the phone's Safari from the PC through its Web Inspector over USB, and report what each page did.
+
+1. **Connect the iPhone** straight to the PC and tap "Trust This Computer".
+2. **Turn on the Web Inspector** in Settings → Safari → Advanced → Web Inspector.
+3. **Keep Safari in front** on one tab, and set Settings → Display & Brightness → Auto-Lock to Never, since a locked or background Safari stops answering.
+4. **Start the tools** with `tools/phone/run.sh`, which lists the pages it can reach.
+5. **Probe a site** with `tools/phone/iphone.sh python3 tools/phone/probe.py <url>`. It opens the URL in the tab, watches it, and prints the failed requests, the console errors and the page's text. `--help` lists its other options.
+6. **Stop them** with `tools/phone/stop.sh`.
+
+- **One client at a time:** a second inspector connection to the tab drops the first.
+- **A stalled log:** restart the tools with `tools/phone/run.sh` when the log's newest line lags the clock.
+- **Privacy:** the phone's log, the probe's output, the pages `status.sh` lists and the phone's name all name its owner. Keep them out of commits and issues; git ignores `logs/` for them.
 
 ## The PC bench
 
@@ -100,36 +133,5 @@ The bench works only while the PC runs and the phone shares its Wi-Fi. A phone t
 
 - **Renew:** a free Apple ID signs the app for 7 days. Repeat step 3 with the same IPA.
 - **After a change to the app:** repeat steps 1, 3 and 5, since the app starts its proxy only at launch.
-- **The app's log:** each line also goes to the phone's log, prefixed with the app's name. Read it with `tools/phone/log.sh | grep proxy-test:`, from the next section.
+- **The app's log:** each line also goes to the phone's log, prefixed with the app's name. Read it with `tools/phone/log.sh | grep proxy-test:`, from [The phone tools](#the-phone-tools).
 - **"Maximum number of apps", or an app that won't open after install:** see SafariFix's notes in [Set up the app](#set-up-the-app).
-
-## The phone tools
-
-`tools/phone/` holds what the PC needs to set up, sign for and study the iPhone. The tools run in a container image, `iphone-tools`, which reaches the phone over USB through the PC's usbmuxd.
-
-| Script | What it does |
-|---|---|
-| `install.sh` | Sets up the PC once, then checks the iPhone and the Apple ID |
-| `build.sh` | Rebuilds the container image after a change to `image/` |
-| `run.sh` | Starts the inspector, the log recorder and the USB forward to the app's debug record |
-| `status.sh` | Shows what runs, the phone's iOS, its web pages and the debug record |
-| `log.sh` | Prints the phone's log since `run.sh` |
-| `stop.sh` | Stops all three |
-| `plumesign.sh` | Signs and installs an IPA with the signer that `pins.sh` pins |
-| `iphone.sh` | Runs one command in the container, such as `idevice_id -l` |
-| `probe.py` | Opens a page through the inspector and reports what it did |
-
-### Measure a page on the phone
-
-A page's failure shows only in Safari 10.1 on the phone, while the PC lacks both the phone's screen and a Safari that old. The phone tools drive the phone's Safari from the PC through its Web Inspector over USB, and report what each page did.
-
-1. **Connect the iPhone** straight to the PC and tap "Trust This Computer".
-2. **Turn on the Web Inspector** in Settings → Safari → Advanced → Web Inspector.
-3. **Keep Safari in front** on one tab, and set Settings → Display & Brightness → Auto-Lock to Never, since a locked or background Safari stops answering.
-4. **Start the tools** with `tools/phone/run.sh`, which lists the pages it can reach.
-5. **Probe a site** with `tools/phone/iphone.sh python3 tools/phone/probe.py <url>`. It opens the URL in the tab, watches it, and prints the failed requests, the console errors and the page's text. `--help` lists its other options.
-6. **Stop them** with `tools/phone/stop.sh`.
-
-- **One client at a time:** a second inspector connection to the tab drops the first.
-- **A stalled log:** restart the tools with `tools/phone/run.sh` when the log's newest line lags the clock.
-- **Privacy:** the phone's log, the probe's output, the pages `status.sh` lists and the phone's name all name its owner. Keep them out of commits and issues; git ignores `logs/` for them.
