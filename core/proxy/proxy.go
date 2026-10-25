@@ -34,9 +34,10 @@ const etagMark = "-sfx1"
 var hopHeaders = []string{"Connection", "Proxy-Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization",
 	"Te", "Trailer", "Transfer-Encoding", "Upgrade"}
 
-// Stats counts what the proxy did.
+// Stats counts what the proxy did. Rejected counts the TLS handshakes in which Safari refused SafariFix's
+// certificate, as it does while the root isn't trusted.
 type Stats struct {
-	Connections, Tunnels, Decrypted, Requests, Failures int64
+	Connections, Tunnels, Decrypted, Requests, Failures, Rejected int64
 }
 
 // Proxy serves Safari.
@@ -51,6 +52,9 @@ type Proxy struct {
 	// WebSockets need HTTP/1.1, which upstream may not pick.
 	upgrades *http.Transport
 	logf     func(format string, args ...interface{})
+
+	// Debug, when set, serves the paths under /debug/ of the proxy's own pages, for a debug build of the app.
+	Debug http.Handler
 }
 
 // New returns a proxy that signs site certificates with auth and rewrites pages with fixer. roots verifies the
@@ -93,6 +97,7 @@ func (p *Proxy) Stats() Stats {
 		Decrypted:   atomic.LoadInt64(&p.stats.Decrypted),
 		Requests:    atomic.LoadInt64(&p.stats.Requests),
 		Failures:    atomic.LoadInt64(&p.stats.Failures),
+		Rejected:    atomic.LoadInt64(&p.stats.Rejected),
 	}
 }
 
@@ -129,21 +134,41 @@ func (p *Proxy) local(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/x-x509-ca-cert")
 		w.Write(p.auth.RootDER())
 	case "/":
-		s := p.Stats()
-		rewritten, cached, failed := p.fixer.Stats()
+		// The setup page, which the app opens in Safari: only what the user does here. The counts are in the
+		// app's Details and the phone's log.
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprintf(w, `<!doctype html><meta name="viewport" content="width=device-width"><title>SafariFix</title>
-<h1>SafariFix</h1>
-<p><a href="/safarifix.crt">Install the root certificate</a>, then turn it on in Settings → General → About →
-Certificate Trust Settings. Its name is “%s”.</p>
-<p>%d connections: %d tunnelled, %d decrypted; %d requests, %d failed.<br>
-Scripts: %d rewritten, %d from the cache, %d left as they were.</p>`,
-			html.EscapeString(p.auth.Root().Subject.CommonName),
-			s.Connections, s.Tunnels, s.Decrypted, s.Requests, s.Failures, rewritten, cached, failed)
+		fmt.Fprintf(w, setupPage, html.EscapeString(p.auth.Root().Subject.CommonName))
 	default:
+		if p.Debug != nil && strings.HasPrefix(r.URL.Path, "/debug/") {
+			http.StripPrefix("/debug", p.Debug).ServeHTTP(w, r)
+			return
+		}
 		http.NotFound(w, r)
 	}
 }
+
+// setupPage installs the root certificate; %s is the root's name.
+const setupPage = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>SafariFix</title>
+<style>
+body { margin: 0; padding: 24px 20px; background: #efeff4; color: #000; font: 17px/1.4 -apple-system, sans-serif; }
+h1 { margin: 0 0 16px; font-size: 28px; }
+.card { background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+.button { display: block; margin: 16px 0 4px; padding: 13px; border-radius: 10px; background: #007aff; color: #fff;
+  font-weight: 600; text-align: center; text-decoration: none; }
+ol { margin: 0; padding-left: 22px; }
+li { margin: 8px 0; }
+.name { font-weight: 600; }
+</style>
+<h1>SafariFix</h1>
+<div class="card">Safari needs SafariFix's certificate to open the sites SafariFix fixes.
+<a class="button" href="/safarifix.crt">Install the certificate</a></div>
+<div class="card"><ol>
+<li>Tap <b>Allow</b>, then <b>Install</b> in Settings.</li>
+<li>In Settings → General → About → Certificate Trust Settings, turn on <span class="name">%s</span> and tap <b>Continue</b>.</li>
+<li>Go back to SafariFix.</li>
+</ol></div>
+`
 
 func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 	conn, buffered, err := w.(http.Hijacker).Hijack()
@@ -210,6 +235,10 @@ func (p *Proxy) decrypt(client net.Conn, hostport string) {
 	})
 	if err := conn.Handshake(); err != nil {
 		atomic.AddInt64(&p.stats.Failures, 1)
+		if strings.Contains(err.Error(), "remote error: tls: unknown certificate") ||
+			strings.Contains(err.Error(), "remote error: tls: bad certificate") {
+			atomic.AddInt64(&p.stats.Rejected, 1)
+		}
 		p.logf("TLS with Safari for %s failed: %v", host, err)
 		client.Close()
 		return
