@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Builds SafariFix for the iPhone 5 on iOS 10 into build/SafariFix.ipa, unsigned; sign and install it with CleanCam's
-# tools/plumesign.sh. The core builds with Go 1.14, the last Go for 32-bit iPhones, as a C library that links into
-# the Objective-C app in ios/app/.
+# tools/plumesign.sh. DEBUG=1 builds build/SafariFix-debug.ipa instead, which also saves pictures of its main screen
+# for the proxy to serve on http://127.0.0.1:8118/debug/ (see ios/app/main.m). The core builds with Go 1.14, the
+# last Go for 32-bit iPhones, as a C library that links into the Objective-C app in ios/app/.
 # Runs on Linux: Go, and clang and Apple's ld64 from the theos project's iOS toolchain, run in a container against
 # the iOS 11.4 SDK. Everything downloads once into build/ (see tools/deps.sh).
-# Needs podman or docker, curl, git and zip.
+# Needs podman or docker, curl, git, zip and python3.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source tools/deps.sh
@@ -16,6 +17,12 @@ core/go.sh version >/dev/null
 
 OUT=build/safarifix-ios
 APP=$OUT/Payload/SafariFix.app
+IPA=build/SafariFix.ipa
+CFLAGS=
+if [[ ${DEBUG:-} == 1 ]]; then
+  IPA=build/SafariFix-debug.ipa
+  CFLAGS=-DSF_DEBUG=1
+fi
 RUNTIME=$(command -v podman || command -v docker || true)
 if [[ -z $RUNTIME ]]; then
   echo "Install podman or docker; the toolchain runs in a container." >&2
@@ -28,7 +35,7 @@ else
   USER_OPTS=(--user "$(id -u):$(id -g)")
 fi
 
-rm -rf "$OUT" build/SafariFix.ipa
+rm -rf "$OUT" "$IPA"
 mkdir -p "$APP"
 # The toolchain's bin comes first on PATH so Go packs the library with its Mach-O ar.
 "$RUNTIME" run --rm --security-opt label=disable "${USER_OPTS[@]}" -v "$PWD:$PWD" -w "$PWD" \
@@ -41,12 +48,14 @@ mkdir -p "$APP"
     cd core
     $PWD/$GO build -buildmode=c-archive -o $PWD/$OUT/libsafarifix.a ./ios
     cd ..
-    # The Go runtime and the core's net and crypto packages need CoreFoundation, Security and libresolv.
-    ios/cc.sh -fobjc-arc -O2 -Wall -I $OUT ios/app/*.m $OUT/libsafarifix.a \
+    # The Go runtime and the core's net and crypto packages need CoreFoundation, Security and libresolv; the app's
+    # setup checks need CFNetwork and Security.
+    ios/cc.sh -fobjc-arc -O2 -Wall $CFLAGS -I $OUT ios/app/*.m $OUT/libsafarifix.a \
       -framework Foundation -framework UIKit -framework AVFoundation -framework QuartzCore -framework CoreGraphics \
-      -framework CoreFoundation -framework Security -lresolv -o $APP/SafariFix
+      -framework CoreFoundation -framework CFNetwork -framework Security -lresolv -o $APP/SafariFix
   "
 
 cp ios/app/Info.plist "$APP/"
-(cd "$OUT" && zip -qr ../SafariFix.ipa Payload)
-echo "Built build/SafariFix.ipa; the core: $(du -h "$OUT/libsafarifix.a" | cut -f1), the app: $(du -h "$APP/SafariFix" | cut -f1)"
+python3 tools/launch-image.py "$APP"
+(cd "$OUT" && zip -qr "../${IPA#build/}" Payload)
+echo "Built $IPA; the core: $(du -h "$OUT/libsafarifix.a" | cut -f1), the app: $(du -h "$APP/SafariFix" | cut -f1)"

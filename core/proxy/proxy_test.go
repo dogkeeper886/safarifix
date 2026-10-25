@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dogkeeper886/safarifix/core/certs"
 	"github.com/dogkeeper886/safarifix/core/fix"
@@ -163,5 +164,66 @@ func TestServesItsOwnPagesThroughItself(t *testing.T) {
 	}
 	if s := p.Stats(); s.Requests != 0 {
 		t.Errorf("the request went out as if to a website: %+v", s)
+	}
+}
+
+func TestTheSetupPageShowsOnlyTheSetup(t *testing.T) {
+	site := website()
+	defer site.Close()
+	_, p, done := start(t, site)
+	defer done()
+	srv := httptest.NewServer(p)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, _ := ioutil.ReadAll(resp.Body)
+	resp.Body.Close()
+	for _, want := range []string{`href="/safarifix.crt"`, p.auth.Root().Subject.CommonName, "Certificate Trust Settings"} {
+		if !strings.Contains(string(page), want) {
+			t.Errorf("the setup page lacks %q: %s", want, page)
+		}
+	}
+	if strings.Contains(string(page), "connections") {
+		t.Errorf("the setup page shows the counts: %s", page)
+	}
+}
+
+func TestServesDebugFilesOnlyWhenAsked(t *testing.T) {
+	site := website()
+	defer site.Close()
+	_, p, done := start(t, site)
+	defer done()
+	srv := httptest.NewServer(p)
+	defer srv.Close()
+
+	if resp, err := http.Get(srv.URL + "/debug/screen.png"); err != nil || resp.StatusCode != http.StatusNotFound {
+		t.Errorf("debug path without Debug: %v %v", resp, err)
+	}
+	p.Debug = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("got " + r.URL.Path)) })
+	_, body := get(t, http.DefaultClient, srv.URL+"/debug/screen.png", nil)
+	if body != "got /screen.png" {
+		t.Errorf("debug path with Debug: %q", body)
+	}
+}
+
+func TestCountsSafariRefusingTheCertificate(t *testing.T) {
+	site := website()
+	defer site.Close()
+	client, p, done := start(t, site)
+	defer done()
+	// Safari before the root is trusted: the system roots don't include SafariFix's.
+	client.Transport.(*http.Transport).TLSClientConfig.RootCAs = x509.NewCertPool()
+	if _, err := client.Get(site.URL + "/"); err == nil {
+		t.Fatal("a client without the root reached the site")
+	}
+	// The proxy reads the client's alert after the client has given up.
+	for i := 0; i < 100 && p.Stats().Rejected == 0; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if s := p.Stats(); s.Rejected != 1 {
+		t.Errorf("rejected: %+v", s)
 	}
 }

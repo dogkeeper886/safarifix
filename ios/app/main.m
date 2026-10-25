@@ -5,13 +5,21 @@
 #import <unistd.h>
 
 #include "libsafarifix.h"
+#import "SFChecks.h"
+#import "SFDetailsViewController.h"
+#import "SFMainView.h"
 
 // SafariFix's app: runs the core's proxy on 127.0.0.1:8118 for Safari, and keeps itself running in the background
-// with a silent audio loop, so the proxy serves Safari while Safari is in front. Every 30 seconds it logs a
-// heartbeat to the phone's log, prefixed "SafariFix:"; a gap in the heartbeats means iOS suspended the app.
+// with a silent audio loop, so the proxy serves Safari while Safari is in front.
+// The main screen (SFMainView) shows only what the user needs: whether Safari is ready, the setup steps left, and
+// when the signing runs out. Everything for debugging goes to the phone's log, prefixed "SafariFix:", and to the
+// Details screen: every 30 seconds a heartbeat, where a gap means iOS suspended the app, and each change the
+// setup checks find. A debug build (DEBUG=1 ios/build.sh) also saves pictures of the main screen, which the proxy
+// serves on http://127.0.0.1:8118/debug/.
 
 static const int kPort = 8118;
 static NSString *const kSetupURL = @"http://127.0.0.1:8118/";
+static NSString *const kPACURL = @"http://127.0.0.1:8118/proxy.pac";
 
 /// One second of 16-bit mono silence at 8 kHz, as a WAV file.
 static NSData *SilentWav(void) {
@@ -43,36 +51,62 @@ static NSString *TakeString(char *s) {
     return string;
 }
 
-@interface AppDelegate : UIResponder <UIApplicationDelegate>
+@interface AppDelegate : UIResponder <UIApplicationDelegate, SFMainViewActions>
 @property (nonatomic, strong) UIWindow *window;
 @end
 
 @implementation AppDelegate {
     AVAudioPlayer *_silence;
     dispatch_source_t _heartbeat;
-    UILabel *_status;
-    UIButton *_setup;
-    UITextView *_help;
+    // Runs the setup checks every 2 seconds while the app is in front, so the screen follows the user's changes.
+    NSTimer *_checks;
+    BOOL _checkingTrust;
+    SFMainView *_main;
+    SFModel *_model;
+    // What the checks found, for the Details screen and the log.
+    NSString *_proxyFound, *_trustFound, *_lastSetup;
+    // Where a debug build saves its pictures; empty otherwise.
+    NSString *_debugDir;
 }
 
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+    _model = [SFModel new];
+    _model.core = SFCoreStarting;
+    _model.pacURL = kPACURL;
+    _model.signedUntil = SFSignedUntil();
+    [self log:[NSString stringWithFormat:@"signed until %@", _model.signedUntil ?: @"unknown"]];
+
     self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
     UIViewController *root = [UIViewController new];
-    root.view.backgroundColor = [UIColor whiteColor];
-    [self buildScreenIn:root.view];
+    root.automaticallyAdjustsScrollViewInsets = NO;
+    _main = [[SFMainView alloc] initWithFrame:self.window.bounds];
+    _main.actions = self;
+    root.view = _main;
     self.window.rootViewController = root;
     [self.window makeKeyAndVisible];
+    [self show];
 
     [self startSilence];
-    [self showStatus:@"Starting… The first start makes your root certificate, which takes a while."];
     NSString *data = [self folder:NSApplicationSupportDirectory named:@"SafariFix"];
     NSString *cache = [self folder:NSCachesDirectory named:@"scripts"];
+#if SF_DEBUG
+    _debugDir = [self folder:NSCachesDirectory named:@"debug"];
+#else
+    _debugDir = @"";
+#endif
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        NSString *error = TakeString(SFStart((char *)data.UTF8String, (char *)cache.UTF8String, kPort));
+        SFSetTimeZone((int)[NSTimeZone localTimeZone].secondsFromGMT);
+        NSString *error = TakeString(SFStart((char *)data.UTF8String, (char *)cache.UTF8String,
+                                             (char *)self->_debugDir.UTF8String, kPort));
         dispatch_async(dispatch_get_main_queue(), ^{
             [self log:error ? [@"FAILED to start: " stringByAppendingString:error] : @"started"];
-            self->_setup.enabled = error == nil;
-            [self refresh];
+            self->_model.core = error ? SFCoreFailed : SFCoreRunning;
+            self->_model.failure = error;
+            self->_model.rootName = TakeString(SFRootName());
+            [self check];
+#if SF_DEBUG
+            [self saveStates];
+#endif
         });
     });
 
@@ -97,53 +131,98 @@ static NSString *TakeString(char *s) {
     return YES;
 }
 
+- (void)applicationDidBecomeActive:(UIApplication *)application {
+    [self check];
+    _checks = [NSTimer scheduledTimerWithTimeInterval:2 target:self selector:@selector(check) userInfo:nil repeats:YES];
+}
+
+- (void)applicationWillResignActive:(UIApplication *)application {
+    [_checks invalidate];
+    _checks = nil;
+}
+
 - (void)applicationDidEnterBackground:(UIApplication *)application {
     [self log:@"entered the background"];
 }
 
 - (void)applicationWillEnterForeground:(UIApplication *)application {
     [self log:@"entering the foreground"];
-    [self refresh];
 }
 
-- (void)buildScreenIn:(UIView *)view {
-    CGFloat width = view.bounds.size.width - 32;
-    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(16, 28, width, 30)];
-    title.text = @"SafariFix";
-    title.font = [UIFont boldSystemFontOfSize:24];
-    [view addSubview:title];
-
-    _status = [[UILabel alloc] initWithFrame:CGRectMake(16, 62, width, 64)];
-    _status.numberOfLines = 0;
-    _status.font = [UIFont systemFontOfSize:13];
-    [view addSubview:_status];
-
-    // Enabled once the proxy listens; Safari finds nothing on 127.0.0.1:8118 before that.
-    _setup = [UIButton buttonWithType:UIButtonTypeSystem];
-    _setup.frame = CGRectMake(16, 130, width, 36);
-    _setup.enabled = NO;
-    [_setup setTitle:@"Open the setup page in Safari" forState:UIControlStateNormal];
-    _setup.titleLabel.font = [UIFont systemFontOfSize:17];
-    [_setup addTarget:self action:@selector(openSetup) forControlEvents:UIControlEventTouchUpInside];
-    [view addSubview:_setup];
-
-    _help = [[UITextView alloc] initWithFrame:CGRectMake(12, 172, width + 8, view.bounds.size.height - 180)];
-    _help.editable = NO;
-    _help.font = [UIFont systemFontOfSize:14];
-    _help.autoresizingMask = UIViewAutoresizingFlexibleHeight;
-    _help.text = @"Set up once:\n"
-        "1. Settings → Wi-Fi → (i) next to your network → HTTP Proxy → Auto, URL http://127.0.0.1:8118/proxy.pac\n"
-        "2. Open the setup page in Safari, tap “Install the root certificate”, then Allow and Install.\n"
-        "3. Settings → General → About → Certificate Trust Settings: turn on the SafariFix root named above, "
-        "and tap Continue on the warning. Until its switch is on, Safari can't open any fixed site.\n\n"
-        "Then keep SafariFix running in the background: it plays silence to stay awake. "
-        "In the app switcher, swipe away only Safari, never SafariFix. "
-        "While it isn't running, Safari goes straight to the internet, unfixed.";
-    [view addSubview:_help];
+/// Checks the proxy setting at once and the root's trust off the main thread, then shows what they found.
+- (void)check {
+    if (_model.core != SFCoreRunning) return;
+    NSString *found = nil;
+    _model.proxySet = SFCheckProxy(kPort, &found);
+    _proxyFound = found;
+    if (!_checkingTrust) {
+        _checkingTrust = YES;
+        NSString *chain = TakeString(SFTestChain());
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            NSString *trustFound = nil;
+            SFCheck trusted = SFCheckTrust(chain, &trustFound);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                self->_checkingTrust = NO;
+                self->_model.trusted = trusted;
+                self->_trustFound = trustFound;
+                [self show];
+            });
+        });
+    }
+    [self show];
 }
 
-- (void)openSetup {
+- (void)show {
+    [_main show:_model];
+    NSString *setup = [NSString stringWithFormat:@"Wi-Fi proxy %@; certificate %@", _proxyFound ?: @"not checked",
+                       _trustFound ?: @"not checked"];
+    if (![setup isEqualToString:_lastSetup]) {
+        _lastSetup = setup;
+        [self log:[@"setup: " stringByAppendingString:setup]];
+    }
+#if SF_DEBUG
+    [self saveScreen];
+#endif
+}
+
+// SFMainViewActions
+
+- (void)installCertificate {
     [[UIApplication sharedApplication] openURL:[NSURL URLWithString:kSetupURL] options:@{} completionHandler:nil];
+}
+
+- (void)copyPACURL {
+    [UIPasteboard generalPasteboard].string = kPACURL;
+    [_main showCopied];
+}
+
+- (void)showDetails {
+    __weak AppDelegate *weakSelf = self;
+    SFDetailsViewController *details = [[SFDetailsViewController alloc] initWithText:^{ return [weakSelf details]; }];
+    [self.window.rootViewController presentViewController:[[UINavigationController alloc] initWithRootViewController:details]
+                                                 animated:YES completion:nil];
+}
+
+/// The Details screen's text.
+- (NSString *)details {
+    NSDateFormatter *format = [NSDateFormatter new];
+    format.dateFormat = @"yyyy-MM-dd HH:mm";
+    NSString *core = @[@"starting", @"running", @"FAILED: "][_model.core];
+    NSDictionary *info = [NSBundle mainBundle].infoDictionary;
+    NSMutableString *text = [NSMutableString string];
+    [text appendFormat:@"Core          %@%@ on 127.0.0.1:%d\n", core, _model.failure ?: @"", kPort];
+    [text appendFormat:@"PAC file      %@\n", kPACURL];
+    [text appendFormat:@"Wi-Fi proxy   %@\n", _proxyFound ?: @"not checked"];
+    [text appendFormat:@"Root          %@\n", _model.rootName.length ? _model.rootName : @"none yet"];
+    [text appendFormat:@"Certificate   %@\n", _trustFound ?: @"not checked"];
+    [text appendFormat:@"Signed until  %@\n",
+     _model.signedUntil ? [format stringFromDate:_model.signedUntil] : @"unknown: no embedded profile"];
+    [text appendFormat:@"App           %@\n", [self appState]];
+    [text appendFormat:@"Version       %@ (%@)%@\n", info[@"CFBundleShortVersionString"], info[@"CFBundleVersion"],
+     _debugDir.length ? @", debug build" : @""];
+    [text appendFormat:@"\nCounts\n%@\n", TakeString(SFStatus())];
+    [text appendFormat:@"\nThe core's last log lines\n%@\n", TakeString(SFRecentLog())];
+    return text;
 }
 
 /// Plays a looping silence, mixed with other apps' audio, which the audio background mode keeps running.
@@ -162,25 +241,16 @@ static NSString *TakeString(char *s) {
     if (![_silence play]) [self log:[NSString stringWithFormat:@"silence FAILED: %@", error.localizedDescription]];
 }
 
-- (void)refresh {
-    NSString *rootName = TakeString(SFRootName());
-    NSString *status = TakeString(SFStatus());
-    [self showStatus:rootName.length ? [NSString stringWithFormat:@"Running on 127.0.0.1:%d. Root certificate: %@.\n%@", kPort, rootName, status]
-                                     : status];
-}
-
-- (void)showStatus:(NSString *)text {
-    _status.text = text;
-}
-
-- (void)beat {
+- (NSString *)appState {
     UIApplication *app = [UIApplication sharedApplication];
     NSString *state = @[@"active", @"inactive", @"background"][app.applicationState];
     NSTimeInterval left = app.backgroundTimeRemaining;
     NSString *time = left > 1e9 ? @"unlimited" : [NSString stringWithFormat:@"%.0f s", left];
-    [self log:[NSString stringWithFormat:@"%@, background time %@, audio %@; %@", state, time,
-               _silence.playing ? @"on" : @"OFF", TakeString(SFStatus())]];
-    if (app.applicationState == UIApplicationStateActive) [self refresh];
+    return [NSString stringWithFormat:@"%@, background time %@, audio %@", state, time, _silence.playing ? @"on" : @"OFF"];
+}
+
+- (void)beat {
+    [self log:[NSString stringWithFormat:@"%@; %@", [self appState], TakeString(SFStatus())]];
 }
 
 - (NSString *)folder:(NSSearchPathDirectory)directory named:(NSString *)name {
@@ -193,6 +263,65 @@ static NSString *TakeString(char *s) {
 - (void)log:(NSString *)line {
     NSLog(@"SafariFix: %@", line);
 }
+
+#if SF_DEBUG
+static NSData *PNGOf(UIView *view) {
+    UIGraphicsBeginImageContextWithOptions(view.bounds.size, YES, 0);
+    [view.layer renderInContext:UIGraphicsGetCurrentContext()];
+    UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return UIImagePNGRepresentation(image);
+}
+
+/// Saves the screen as it is to debug/screen.png, once its layout is done.
+- (void)saveScreen {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) return;
+        [self.window layoutIfNeeded];
+        [PNGOf(self.window) writeToFile:[self->_debugDir stringByAppendingPathComponent:@"screen.png"] atomically:YES];
+    });
+}
+
+/// Saves the main screen in each state to debug/state-<name>.png, to check the design from the PC without
+/// changing the phone's settings.
+- (void)saveStates {
+    NSDictionary<NSString *, SFModel *> *states = @{
+        @"starting": [self sample:SFCoreStarting trusted:SFCheckUnknown proxy:SFCheckUnknown],
+        @"failed": [self sample:SFCoreFailed trusted:SFCheckUnknown proxy:SFCheckUnknown],
+        @"checking": [self sample:SFCoreRunning trusted:SFCheckUnknown proxy:SFCheckNo],
+        @"setup": [self sample:SFCoreRunning trusted:SFCheckNo proxy:SFCheckNo],
+        @"setup-step2": [self sample:SFCoreRunning trusted:SFCheckYes proxy:SFCheckNo],
+        @"untrusted": [self sample:SFCoreRunning trusted:SFCheckNo proxy:SFCheckYes],
+        @"ready": [self sample:SFCoreRunning trusted:SFCheckYes proxy:SFCheckYes],
+    };
+    for (NSString *name in states) {
+        SFMainView *view = [[SFMainView alloc] initWithFrame:self.window.bounds];
+        [view show:states[name]];
+        [view layoutIfNeeded];
+        [PNGOf(view) writeToFile:[_debugDir stringByAppendingPathComponent:
+                                  [NSString stringWithFormat:@"state-%@.png", name]] atomically:YES];
+    }
+    SFModel *soon = [self sample:SFCoreRunning trusted:SFCheckYes proxy:SFCheckYes];
+    soon.signedUntil = [NSDate dateWithTimeIntervalSinceNow:24 * 3600];
+    SFMainView *view = [[SFMainView alloc] initWithFrame:self.window.bounds];
+    [view show:soon];
+    [view layoutIfNeeded];
+    [PNGOf(view) writeToFile:[_debugDir stringByAppendingPathComponent:@"state-renew-soon.png"] atomically:YES];
+    [self log:@"saved the main screen's states in debug/"];
+}
+
+- (SFModel *)sample:(SFCore)core trusted:(SFCheck)trusted proxy:(SFCheck)proxy {
+    SFModel *model = [SFModel new];
+    model.core = core;
+    model.failure = @"listen tcp 127.0.0.1:8118: bind: address already in use";
+    model.rootName = _model.rootName.length ? _model.rootName : @"SafariFix root 000000";
+    model.trusted = trusted;
+    model.proxySet = proxy;
+    model.pacURL = kPACURL;
+    model.signedUntil = _model.signedUntil ?: [NSDate dateWithTimeIntervalSinceNow:5 * 24 * 3600];
+    return model;
+}
+#endif
 
 @end
 
