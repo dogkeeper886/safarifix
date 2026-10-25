@@ -207,6 +207,12 @@ func TestServesDebugFilesOnlyWhenAsked(t *testing.T) {
 	if body != "got /screen.png" {
 		t.Errorf("debug path with Debug: %q", body)
 	}
+	// A website whose name points at 127.0.0.1, asking under its own name.
+	req, _ := http.NewRequest("GET", srv.URL+"/debug/log.txt", nil)
+	req.Host = "rebound.example:8118"
+	if resp, err := http.DefaultClient.Do(req); err != nil || resp.StatusCode != http.StatusNotFound {
+		t.Errorf("debug path under a website's name: %v %v", resp, err)
+	}
 }
 
 func TestCountsSafariRefusingTheCertificate(t *testing.T) {

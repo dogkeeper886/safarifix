@@ -5,17 +5,24 @@
 #import <unistd.h>
 
 #include "libsafarifix.h"
+#import "SFBrowser.h"
 #import "SFChecks.h"
+#import "SFDebugLog.h"
 #import "SFDetailsViewController.h"
 #import "SFMainView.h"
 
-// SafariFix's app: runs the core's proxy on 127.0.0.1:8118 for Safari, and keeps itself running in the background
-// with a silent audio loop, so the proxy serves Safari while Safari is in front.
-// The main screen (SFMainView) shows only what the user needs: whether Safari is ready, the setup steps left, and
-// when the signing runs out. Everything for debugging goes to the phone's log, prefixed "SafariFix:", and to the
-// Details screen: every 30 seconds a heartbeat, where a gap means iOS suspended the app, and each change the
-// setup checks find. A debug build (DEBUG=1 ios/build.sh) also saves pictures of the main screen, which the proxy
-// serves on http://127.0.0.1:8118/debug/.
+// SafariFix's app: runs the core's proxy on 127.0.0.1:8118 for Safari and for its own browser (SFBrowser), and keeps
+// itself running in the background with a silent audio loop, so the proxy serves Safari while Safari is in front.
+// The main screen (SFMainView) shows only what the user needs: whether the app is ready, the browser, the setup
+// steps left for Safari, which are optional, and when the signing runs out. Everything for debugging goes to the debug record (SFDebugLog.h), which
+// the Details screen shows and the proxy serves on http://127.0.0.1:8118/debug/: the app's events, each change the
+// setup checks find, and what each page in the browser did. Every 30 seconds a heartbeat goes to the phone's log,
+// prefixed "SafariFix:", where a gap means iOS suspended the app. A debug build (DEBUG=1 ios/build.sh) also saves
+// pictures of the main screen there.
+
+#ifndef SF_DEBUG
+#define SF_DEBUG 0
+#endif
 
 static const int kPort = 8118;
 static NSString *const kSetupURL = @"http://127.0.0.1:8118/";
@@ -51,6 +58,34 @@ static NSString *TakeString(char *s) {
     return string;
 }
 
+/// The one thread that calls into the core. Go runs each call on a stack in its own heap, and the browser's
+/// JavaScript collector, scanning a thread it knows (the main thread, a queue thread that once ran JavaScript)
+/// mid-call, reads a stack size past 2 GB and stops the app; this thread never runs JavaScript.
+static NSThread *gCoreThread;
+
+@interface SFCoreCall : NSObject
+@end
+
+@implementation SFCoreCall
++ (void)run:(dispatch_block_t)block {
+    block();
+}
+@end
+
+/// Runs block on the core's thread, waiting for it when wait is set.
+static void OnCore(BOOL wait, dispatch_block_t block) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        gCoreThread = [[NSThread alloc] initWithBlock:^{
+            [[NSRunLoop currentRunLoop] addPort:[NSMachPort port] forMode:NSDefaultRunLoopMode];
+            for (;;) [[NSRunLoop currentRunLoop] run];
+        }];
+        gCoreThread.name = @"core calls";
+        [gCoreThread start];
+    });
+    [SFCoreCall performSelector:@selector(run:) onThread:gCoreThread withObject:[block copy] waitUntilDone:wait];
+}
+
 @interface AppDelegate : UIResponder <UIApplicationDelegate, SFMainViewActions>
 @property (nonatomic, strong) UIWindow *window;
 @end
@@ -63,13 +98,28 @@ static NSString *TakeString(char *s) {
     BOOL _checkingTrust;
     SFMainView *_main;
     SFModel *_model;
+    // The core's test chain for the trust check, from SFTestChain once the core runs.
+    NSString *_chain;
     // What the checks found, for the Details screen and the log.
     NSString *_proxyFound, *_trustFound, *_lastSetup;
-    // Where a debug build saves its pictures; empty otherwise.
+    // The debug record's folder, which the core serves under /debug/.
     NSString *_debugDir;
+    SFBrowserViewController *_browser;
 }
 
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+    _debugDir = [self folder:NSCachesDirectory named:@"debug"];
+    SFDebugStart(_debugDir, ^{
+        __block NSString *status;
+        OnCore(YES, ^{ status = TakeString(SFStatus()); });
+        return status;
+    }, ^{
+        __block NSString *log;
+        OnCore(YES, ^{ log = TakeString(SFRecentLog()); });
+        return log;
+    });
+    [self log:@"start"];
+
     _model = [SFModel new];
     _model.core = SFCoreStarting;
     _model.pacURL = kPACURL;
@@ -89,20 +139,27 @@ static NSString *TakeString(char *s) {
     [self startSilence];
     NSString *data = [self folder:NSApplicationSupportDirectory named:@"SafariFix"];
     NSString *cache = [self folder:NSCachesDirectory named:@"scripts"];
-#if SF_DEBUG
-    _debugDir = [self folder:NSCachesDirectory named:@"debug"];
-#else
-    _debugDir = @"";
-#endif
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    NSString *debug = _debugDir;
+    CFAbsoluteTime starting = CFAbsoluteTimeGetCurrent();
+    OnCore(NO, ^{
         SFSetTimeZone((int)[NSTimeZone localTimeZone].secondsFromGMT);
         NSString *error = TakeString(SFStart((char *)data.UTF8String, (char *)cache.UTF8String,
-                                             (char *)self->_debugDir.UTF8String, kPort));
+                                             (char *)debug.UTF8String, kPort));
+        NSString *rootName = error ? nil : TakeString(SFRootName());
+        NSString *chain = error ? nil : TakeString(SFTestChain());
         dispatch_async(dispatch_get_main_queue(), ^{
-            [self log:error ? [@"FAILED to start: " stringByAppendingString:error] : @"started"];
+            // The first start also makes the root's key, which takes a while.
+            [self log:error ? [@"FAILED to start: " stringByAppendingString:error]
+                            : [NSString stringWithFormat:@"started in %.1f s", CFAbsoluteTimeGetCurrent() - starting]];
             self->_model.core = error ? SFCoreFailed : SFCoreRunning;
             self->_model.failure = error;
-            self->_model.rootName = TakeString(SFRootName());
+            self->_model.rootName = rootName;
+            self->_chain = chain;
+            if (!error) {
+                // The root is the last of SFTestChain's lines.
+                NSString *root = [chain componentsSeparatedByString:@"\n"].lastObject;
+                SFBrowserStart(kPort, [[NSData alloc] initWithBase64EncodedString:root ?: @"" options:0]);
+            }
             [self check];
 #if SF_DEBUG
             [self saveStates];
@@ -157,7 +214,7 @@ static NSString *TakeString(char *s) {
     _proxyFound = found;
     if (!_checkingTrust) {
         _checkingTrust = YES;
-        NSString *chain = TakeString(SFTestChain());
+        NSString *chain = _chain;
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
             NSString *trustFound = nil;
             SFCheck trusted = SFCheckTrust(chain, &trustFound);
@@ -196,6 +253,11 @@ static NSString *TakeString(char *s) {
     [_main showCopied];
 }
 
+- (void)openBrowser {
+    if (!_browser) _browser = [SFBrowserViewController new];
+    [self.window.rootViewController presentViewController:_browser animated:YES completion:nil];
+}
+
 - (void)showDetails {
     __weak AppDelegate *weakSelf = self;
     SFDetailsViewController *details = [[SFDetailsViewController alloc] initWithText:^{ return [weakSelf details]; }];
@@ -203,7 +265,7 @@ static NSString *TakeString(char *s) {
                                                  animated:YES completion:nil];
 }
 
-/// The Details screen's text.
+/// The Details screen's text: the setup, then the debug record's.
 - (NSString *)details {
     NSDateFormatter *format = [NSDateFormatter new];
     format.dateFormat = @"yyyy-MM-dd HH:mm";
@@ -218,10 +280,10 @@ static NSString *TakeString(char *s) {
     [text appendFormat:@"Signed until  %@\n",
      _model.signedUntil ? [format stringFromDate:_model.signedUntil] : @"unknown: no embedded profile"];
     [text appendFormat:@"App           %@\n", [self appState]];
-    [text appendFormat:@"Version       %@ (%@)%@\n", info[@"CFBundleShortVersionString"], info[@"CFBundleVersion"],
-     _debugDir.length ? @", debug build" : @""];
-    [text appendFormat:@"\nCounts\n%@\n", TakeString(SFStatus())];
-    [text appendFormat:@"\nThe core's last log lines\n%@\n", TakeString(SFRecentLog())];
+    [text appendFormat:@"Version       %@ (%@)%@\n\n", info[@"CFBundleShortVersionString"], info[@"CFBundleVersion"],
+     SF_DEBUG ? @", debug build" : @""];
+    // The record's copy of the core's status and log, which a call into the core here would hold up while it starts.
+    [text appendString:SFDebugDetails()];
     return text;
 }
 
@@ -249,8 +311,10 @@ static NSString *TakeString(char *s) {
     return [NSString stringWithFormat:@"%@, background time %@, audio %@", state, time, _silence.playing ? @"on" : @"OFF"];
 }
 
+/// The heartbeat, only in the phone's log: in the record it would crowd out the pages.
 - (void)beat {
-    [self log:[NSString stringWithFormat:@"%@; %@", [self appState], TakeString(SFStatus())]];
+    NSString *state = [self appState];
+    OnCore(NO, ^{ NSLog(@"SafariFix: %@; %@", state, TakeString(SFStatus())); });
 }
 
 - (NSString *)folder:(NSSearchPathDirectory)directory named:(NSString *)name {
@@ -260,8 +324,9 @@ static NSString *TakeString(char *s) {
     return path;
 }
 
+/// A line in the debug record and the phone's log.
 - (void)log:(NSString *)line {
-    NSLog(@"SafariFix: %@", line);
+    SFDebugApp(line);
 }
 
 #if SF_DEBUG

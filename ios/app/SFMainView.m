@@ -109,6 +109,8 @@ static UIButton *FilledButton(NSString *title, id target, SEL action) {
     UILabel *_proxyBody, *_proxyAddress;
     UIView *_proxyAddressBox;
     UIButton *_copyButton;
+    UIView *_browserCard;
+    UILabel *_safariHeader;
     UIView *_renewCard;
     UILabel *_renewTitle, *_renewBody;
 }
@@ -151,6 +153,17 @@ static UIButton *FilledButton(NSString *title, id target, SEL action) {
                                @[_proxyBadge, Stack(UILayoutConstraintAxisVertical, 8,
                                                     @[proxyTitle, _proxyBody, _proxyAddressBox, _copyButton])]);
 
+    UILabel *browserTitle = Label(17, UIFontWeightSemibold, [UIColor blackColor]);
+    browserTitle.text = @"Browser";
+    UILabel *browserBody = Label(15, UIFontWeightRegular, Secondary());
+    browserBody.text = @"A simple browser inside SafariFix, on any network and with no setup. Pages run slower than "
+                        "in Safari.";
+    UIButton *browserButton = FilledButton(@"Open the browser", self, @selector(openBrowser));
+
+    // Safari's steps are for Safari alone; the browser needs neither.
+    _safariHeader = Label(13, UIFontWeightRegular, Secondary());
+    _safariHeader.text = @"TO USE SAFARI AS WELL";
+
     _renewTitle = Label(17, UIFontWeightSemibold, [UIColor blackColor]);
     _renewBody = Label(15, UIFontWeightRegular, Secondary());
     _renewBody.text = @"After that it won't open until it's installed again from the PC.";
@@ -162,9 +175,11 @@ static UIButton *FilledButton(NSString *title, id target, SEL action) {
 
     _certCard = Card(cert);
     _proxyCard = Card(proxy);
+    _browserCard = Card(Stack(UILayoutConstraintAxisVertical, 8, @[browserTitle, browserBody, browserButton]));
     _renewCard = Card(Stack(UILayoutConstraintAxisVertical, 4, @[_renewTitle, _renewBody]));
     UIStackView *page = Stack(UILayoutConstraintAxisVertical, 16,
-                              @[title, Card(status), _certCard, _proxyCard, _renewCard, details]);
+                              @[title, Card(status), _browserCard, _safariHeader, _certCard, _proxyCard, _renewCard,
+                                details]);
     page.translatesAutoresizingMaskIntoConstraints = NO;
 
     _scroll = [UIScrollView new];
@@ -211,19 +226,22 @@ static UIButton *FilledButton(NSString *title, id target, SEL action) {
         [self setStatus:@"…" color:Grey() title:@"Checking the setup" body:nil];
     } else if (ready) {
         [self setStatus:@"✓" color:Green() title:@"Ready"
-                   body:@"Use Safari as usual. Keep SafariFix in the app switcher: when you close apps, swipe away "
-                         "only Safari."];
+                   body:@"Open the browser below, or use Safari as usual. Keep SafariFix in the app switcher: when "
+                         "you close apps, swipe away only Safari."];
     } else if (proxyDone) {
         [self setStatus:@"!" color:Red() title:@"Safari can't open most sites"
-                   body:@"Safari goes through SafariFix but doesn't trust its certificate yet. Finish step 1."];
+                   body:@"Safari goes through SafariFix but doesn't trust its certificate yet. Finish step 1 below, "
+                         "or turn the Wi-Fi proxy off."];
     } else {
-        [self setStatus:@"!" color:Orange() title:@"Finish setting up"
-                   body:certDone ? @"One step left. Until it's done, Safari opens sites unfixed."
-                                 : @"Two steps, once. Until they're done, Safari opens sites unfixed."];
+        [self setStatus:@"✓" color:Green() title:@"Ready"
+                   body:certDone ? @"Open the browser below. Safari opens sites unfixed until you finish its last "
+                                    "step."
+                                 : @"Open the browser below. Safari opens sites unfixed unless you take its two "
+                                    "steps."];
     }
 
     BOOL steps = running && !checking && !ready;
-    _certCard.hidden = _proxyCard.hidden = !steps;
+    _safariHeader.hidden = _certCard.hidden = _proxyCard.hidden = !steps;
     [_certBadge setGlyph:certDone ? @"✓" : @"1" color:certDone ? Green() : Blue()];
     _certBody.text = certDone ? @"Installed and trusted."
         : [NSString stringWithFormat:@"Tap Install in Safari and follow the page there. Last, in Settings → "
@@ -236,6 +254,7 @@ static UIButton *FilledButton(NSString *title, id target, SEL action) {
            "as the URL:";
     _proxyAddress.text = m.pacURL;
     _proxyAddressBox.hidden = _copyButton.hidden = proxyDone;
+    _browserCard.hidden = !running;
 
     _renewCard.hidden = m.signedUntil == nil;
     if (m.signedUntil) {
@@ -259,6 +278,7 @@ static UIButton *FilledButton(NSString *title, id target, SEL action) {
 
 - (void)installCertificate { [self.actions installCertificate]; }
 - (void)copyPACURL { [self.actions copyPACURL]; }
+- (void)openBrowser { [self.actions openBrowser]; }
 - (void)showDetails { [self.actions showDetails]; }
 
 @end

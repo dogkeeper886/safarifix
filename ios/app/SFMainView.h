@@ -25,6 +25,7 @@ typedef NS_ENUM(NSInteger, SFCheck) { SFCheckUnknown, SFCheckNo, SFCheckYes };
 @protocol SFMainViewActions <NSObject>
 - (void)installCertificate;
 - (void)copyPACURL;
+- (void)openBrowser;
 - (void)showDetails;
 @end
 

@@ -3,7 +3,7 @@
 #import <pthread.h>
 #import <sys/time.h>
 
-#import "DebugLog.h"
+#import "SFDebugLog.h"
 
 // Lines kept in memory and in log.txt.
 static const NSUInteger kKeep = 3000;
@@ -65,7 +65,7 @@ static NSString *Clip(NSString *s, NSUInteger max) {
     return s.length > max ? [[s substringToIndex:max - 1] stringByAppendingString:@"…"] : s;
 }
 
-NSString *DebugShortURL(NSURL *url) {
+NSString *SFDebugShortURL(NSURL *url) {
     if (!url) return @"-";
     NSString *where = url.host ?: url.scheme ?: @"";
     NSString *path = CFBridgingRelease(CFURLCopyPath((__bridge CFURLRef)url));
@@ -73,13 +73,13 @@ NSString *DebugShortURL(NSURL *url) {
     return url.query.length ? [s stringByAppendingString:@"?…"] : s;
 }
 
-void DebugApp(NSString *line) {
-    NSLog(@"browser-test: %@", line);
+void SFDebugApp(NSString *line) {
+    NSLog(@"SafariFix: %@", line);
     Add(@"app", line);
 }
 
-void DebugPageStarted(NSURL *url) {
-    NSString *page = DebugShortURL(url);
+void SFDebugPageStarted(NSURL *url) {
+    NSString *page = SFDebugShortURL(url);
     pthread_mutex_lock(&gLock);
     gPage = (Counts){0};
     gPageURL = page;
@@ -90,8 +90,8 @@ void DebugPageStarted(NSURL *url) {
     Add(@"page", [@"open " stringByAppendingString:page]);
 }
 
-void DebugPageFinished(NSURL *url) {
-    NSString *page = url ? DebugShortURL(url) : nil;
+void SFDebugPageFinished(NSURL *url) {
+    NSString *page = url ? SFDebugShortURL(url) : nil;
     pthread_mutex_lock(&gLock);
     if (!gPageURL || gPageDone) {
         pthread_mutex_unlock(&gLock);
@@ -106,23 +106,23 @@ void DebugPageFinished(NSURL *url) {
                                                 gPageURL, CFAbsoluteTimeGetCurrent() - gPageStarted, c.requests, c.failed,
                                                 c.cancelled, Bytes(c.bytes), c.console, c.errors];
     pthread_mutex_unlock(&gLock);
-    NSLog(@"browser-test: %@", line);
+    NSLog(@"SafariFix: %@", line);
     Add(@"page", line);
 }
 
-void DebugPageFailed(NSError *error) {
+void SFDebugPageFailed(NSError *error) {
     pthread_mutex_lock(&gLock);
     NSString *page = gPageURL ?: @"-";
     gPageDone = YES;
     pthread_mutex_unlock(&gLock);
     NSString *line = [NSString stringWithFormat:@"FAILED %@: %@ %ld %@", page, error.domain, (long)error.code,
                                                 Clip(error.localizedDescription ?: @"", 160)];
-    NSLog(@"browser-test: %@", line);
+    NSLog(@"SafariFix: %@", line);
     Add(@"page", line);
 }
 
-void DebugRequest(NSString *method, NSURL *url, NSInteger status, NSString *type, long long bytes, double seconds,
-                  NSError *error, BOOL cancelled, NSURL *redirect) {
+void SFDebugRequest(NSString *method, NSURL *url, NSInteger status, NSString *type, long long bytes, double seconds,
+                    NSError *error, BOOL cancelled, NSURL *redirect) {
     BOOL failed = !cancelled && error;
     pthread_mutex_lock(&gLock);
     gRun.requests++, gPage.requests++;
@@ -138,14 +138,14 @@ void DebugRequest(NSString *method, NSURL *url, NSInteger status, NSString *type
         what = [NSString stringWithFormat:@"FAILED %@ %ld %@", error.domain, (long)error.code,
                                           Clip(error.localizedDescription ?: @"", 120)];
     } else if (redirect) {
-        what = [NSString stringWithFormat:@"%ld → %@", (long)status, DebugShortURL(redirect)];
+        what = [NSString stringWithFormat:@"%ld → %@", (long)status, SFDebugShortURL(redirect)];
     } else {
         what = [NSString stringWithFormat:@"%ld %@ %@", (long)status, type ?: @"-", Bytes(bytes)];
     }
-    Add(@"request", [NSString stringWithFormat:@"%@ %@ %.2f s %@", method, DebugShortURL(url), seconds, what]);
+    Add(@"request", [NSString stringWithFormat:@"%@ %@ %.2f s %@", method, SFDebugShortURL(url), seconds, what]);
 }
 
-void DebugConsole(NSDictionary *message) {
+void SFDebugConsole(NSDictionary *message) {
     if (![message isKindOfClass:[NSDictionary class]]) return;
     NSString *text = message[@"message"];
     if (![text isKindOfClass:[NSString class]]) {
@@ -170,7 +170,7 @@ void DebugConsole(NSDictionary *message) {
     NSRange space = [frame isKindOfClass:[NSString class]] ? [frame rangeOfString:@" "] : NSMakeRange(NSNotFound, 0);
     NSString *frameURL = space.location == NSNotFound
                              ? nil
-                             : DebugShortURL([NSURL URLWithString:[frame substringFromIndex:NSMaxRange(space)]]);
+                             : SFDebugShortURL([NSURL URLWithString:[frame substringFromIndex:NSMaxRange(space)]]);
     pthread_mutex_lock(&gLock);
     // It also reports each script error the watcher saw, just after it. WebKit alone reports the rest: a frame
     // blocked from another site's, or the text of another site's script error, which the page sees as "Script error.".
@@ -196,7 +196,7 @@ void DebugConsole(NSDictionary *message) {
     NSString *where = @"";
     NSString *url = message[@"sourceURL"];
     if ([url isKindOfClass:[NSString class]] && url.length) {
-        where = [NSString stringWithFormat:@" at %@:%@:%@", DebugShortURL([NSURL URLWithString:url]),
+        where = [NSString stringWithFormat:@" at %@:%@:%@", SFDebugShortURL([NSURL URLWithString:url]),
                                            message[@"lineNumber"] ?: @"?", message[@"columnNumber"] ?: @"?"];
     }
     Add(webkit ? @"webkit" : @"console",
@@ -266,18 +266,20 @@ static void Write(NSString *text, NSString *name) {
                                                     atomically:YES];
 }
 
-/// Writes the files the core serves; runs on gQueue.
+/// Writes the files the core serves, each only when it changed, since the app runs all day; runs on gQueue.
 static void Flush(void) {
+    static NSString *writtenSummary, *writtenCoreLog;
     NSString *status = gCoreStatusBlock ? gCoreStatusBlock() : @"";
-    NSString *coreLog = gCoreLogBlock ? gCoreLogBlock() : @"";
+    NSString *coreLog = (gCoreLogBlock ? gCoreLogBlock() : nil) ?: @"";
     pthread_mutex_lock(&gLock);
-    gCoreStatus = status ?: @"", gCoreLog = coreLog ?: @"";
+    gCoreStatus = status ?: @"", gCoreLog = coreLog;
     NSString *log = gDirty ? [[gLines componentsJoinedByString:@"\n"] stringByAppendingString:@"\n"] : nil;
     gDirty = NO;
     pthread_mutex_unlock(&gLock);
     if (log) Write(log, @"log.txt");
-    Write(Summary(), @"summary.txt");
-    Write(coreLog, @"core.txt");
+    NSString *summary = Summary();
+    if (![summary isEqualToString:writtenSummary]) Write(writtenSummary = summary, @"summary.txt");
+    if (![coreLog isEqualToString:writtenCoreLog]) Write(writtenCoreLog = coreLog, @"core.txt");
 }
 
 static dispatch_source_t Every(double seconds, dispatch_block_t block) {
@@ -289,7 +291,7 @@ static dispatch_source_t Every(double seconds, dispatch_block_t block) {
     return timer;
 }
 
-void DebugStart(NSString *folder, NSString *(^coreStatus)(void), NSString *(^coreLog)(void)) {
+void SFDebugStart(NSString *folder, NSString *(^coreStatus)(void), NSString *(^coreLog)(void)) {
     gFolder = folder;
     gCoreStatusBlock = [coreStatus copy];
     gCoreLogBlock = [coreLog copy];
@@ -319,7 +321,7 @@ void DebugStart(NSString *folder, NSString *(^coreStatus)(void), NSString *(^cor
                         pthread_mutex_lock(&gLock);
                         gWarnings++;
                         pthread_mutex_unlock(&gLock);
-                        DebugApp(@"memory warning");
+                        SFDebugApp(@"memory warning");
                     }];
     [center addObserverForName:UIApplicationDidEnterBackgroundNotification object:nil queue:nil
                     usingBlock:^(NSNotification *note) {
@@ -330,7 +332,7 @@ void DebugStart(NSString *folder, NSString *(^coreStatus)(void), NSString *(^cor
                     usingBlock:^(NSNotification *note) { Add(@"app", @"in front"); }];
 }
 
-NSString *DebugDetails(void) {
+NSString *SFDebugDetails(void) {
     pthread_mutex_lock(&gLock);
     NSUInteger from = gLines.count > kShow ? gLines.count - kShow : 0;
     NSString *timeline = [[gLines subarrayWithRange:NSMakeRange(from, gLines.count - from)] componentsJoinedByString:@"\n"];

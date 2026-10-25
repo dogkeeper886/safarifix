@@ -1,70 +1,28 @@
-#import <Security/Security.h>
 #import <JavaScriptCore/JavaScriptCore.h>
-#import <UIKit/UIKit.h>
+#import <Security/Security.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
-#import <signal.h>
 
-#import "DebugLog.h"
+#import "SFBrowser.h"
+#import "SFDebugLog.h"
 #import "SFDetailsViewController.h"
-#include "libsafarifix.h"
 
-// The browser test: a bare browser in a UIWebView that sends every request through the SafariFix core, running in
-// the app. An NSURLProtocol hands each of the web view's requests to an NSURLSession that uses the core as its proxy
-// and trusts the core's root, so neither a Wi-Fi proxy setting nor a trusted certificate is needed. Each page's
-// requests, script errors and WebKit's messages go to the debug record (DebugLog.h), which the Debug button shows and
-// the core serves under /debug/; the app's lines and each page's load time also go to the phone's log, prefixed
-// "browser-test:". UIWebView, unlike WKWebView, loads in the app's own process, which is what lets the protocol see
-// its requests; the price is JavaScript without the JIT.
-
-// Not SafariFix's 8118, so both apps can run.
-static const int kPort = 8128;
-// Safari's on iOS 10.3.4, read from the phone, so sites treat the test browser as Safari.
+// Safari's on iOS 10.3.4, read from the phone, so sites treat the browser as Safari.
 static NSString *const kUserAgent = @"Mozilla/5.0 (iPhone; CPU iPhone OS 10_3_4 like Mac OS X) AppleWebKit/603.3.8 "
                                      "(KHTML, like Gecko) Version/10.0 Mobile/14G61 Safari/602.1";
 // Marks a request the protocol already passed on, so the session's own load doesn't come back to it.
-static NSString *const kHandled = @"BrowserTestHandled";
-
-static NSString *TakeString(char *s) {
-    if (!s) return nil;
-    NSString *string = [NSString stringWithUTF8String:s];
-    free(s);
-    return string;
-}
-
-/// The one thread that calls into the core. Go runs each call on a stack in its own heap, and the JavaScript collector,
-/// scanning a thread it knows (the main thread, a queue thread that once ran JavaScript) mid-call, reads a stack size
-/// past 2 GB and stops the app; this thread never runs JavaScript.
-static NSThread *gCoreThread;
-
-@interface CoreCall : NSObject
-@end
-
-@implementation CoreCall
-+ (void)run:(dispatch_block_t)block {
-    block();
-}
-@end
-
-static void OnCore(BOOL wait, dispatch_block_t block) {
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        gCoreThread = [[NSThread alloc] initWithBlock:^{
-            [[NSRunLoop currentRunLoop] addPort:[NSMachPort port] forMode:NSDefaultRunLoopMode];
-            for (;;) [[NSRunLoop currentRunLoop] run];
-        }];
-        gCoreThread.name = @"core calls";
-        [gCoreThread start];
-    });
-    [CoreCall performSelector:@selector(run:) onThread:gCoreThread withObject:[block copy] waitUntilDone:wait];
-}
+static NSString *const kHandled = @"SafariFixHandled";
+// How long the page stays while the app is in the background: long enough to read a sign-in code in another app.
+// After that, or at once on a memory warning, the browser lets go of it, so that iOS keeps SafariFix running for
+// Safari rather than closing it for its memory.
+static const NSTimeInterval kKeepInBackground = 120;
 
 /// Reports a page's script errors, failed and blocked loads, and console calls to the debug record. It runs in each
 /// frame as its JavaScript starts, before the page's own scripts, and takes the report function off the page.
 static NSString *const kWatchScript = @
 "(function () {\n"
-"  var report = window.__browserTestReport;\n"
-"  try { delete window.__browserTestReport; } catch (e) {}\n"
+"  var report = window.__safarifixReport;\n"
+"  try { delete window.__safarifixReport; } catch (e) {}\n"
 "  if (typeof report !== 'function') return;\n"
 "  var where = (window === window.top ? 'page ' : 'frame ') + location.href;\n"
 "  function text(a) {\n"
@@ -100,7 +58,7 @@ static void WebKitMessage(id self, SEL cmd, id webView, NSDictionary *message, N
     if ([message isKindOfClass:[NSDictionary class]]) {
         NSMutableDictionary *tagged = [message mutableCopy];
         tagged[@"webkit"] = @YES;
-        DebugConsole(tagged);
+        SFDebugConsole(tagged);
     }
     gWebKitOriginal(self, cmd, webView, message, source);
 }
@@ -116,7 +74,7 @@ static void WatchWebKit(UIWebView *web) {
                      : nil;
     SEL allow = NSSelectorFromString(@"_setAllowsMessaging:");
     if (!method || ![webView respondsToSelector:allow]) {
-        DebugApp(@"WebKit's messages can't be watched on this iOS");
+        SFDebugApp(@"WebKit's messages can't be watched on this iOS");
         return;
     }
     static dispatch_once_t once;
@@ -124,34 +82,34 @@ static void WatchWebKit(UIWebView *web) {
     ((void (*)(id, SEL, BOOL))objc_msgSend)(webView, allow, YES);
 }
 
-@implementation NSObject (BrowserTestWatch)
+@implementation NSObject (SFBrowserWatch)
 
 // WebKit calls this on the web view's frame load delegate, on the thread that runs JavaScript, as each frame's
 // JavaScript starts. UIKit's delegate doesn't have it, so this category answers. The context isn't kept: it would keep
 // the page alive.
 - (void)webView:(id)webView didCreateJavaScriptContext:(JSContext *)context forFrame:(id)frame {
     static dispatch_once_t once;
-    dispatch_once(&once, ^{ DebugApp(@"watching pages' scripts"); });
-    context[@"__browserTestReport"] = ^(NSString *level, NSString *source, NSString *text, NSString *url, NSNumber *line,
-                                        NSNumber *column, NSString *where) {
-        DebugConsole(@{@"message": text ?: @"", @"MessageLevel": level ?: @"?", @"MessageSource": source ?: @"?",
-                       @"sourceURL": url ?: @"", @"lineNumber": line ?: @0, @"columnNumber": column ?: @0,
-                       @"frame": where ?: @""});
+    dispatch_once(&once, ^{ SFDebugApp(@"watching pages' scripts"); });
+    context[@"__safarifixReport"] = ^(NSString *level, NSString *source, NSString *text, NSString *url, NSNumber *line,
+                                      NSNumber *column, NSString *where) {
+        SFDebugConsole(@{@"message": text ?: @"", @"MessageLevel": level ?: @"?", @"MessageSource": source ?: @"?",
+                         @"sourceURL": url ?: @"", @"lineNumber": line ?: @0, @"columnNumber": column ?: @0,
+                         @"frame": where ?: @""});
     };
     [context evaluateScript:kWatchScript];
 }
 
 @end
 
-@class CoreProtocol;
+@class SFCoreProtocol;
 
 /// The session every request goes out on, and which protocol instance each of its tasks serves.
 static NSURLSession *gSession;
-static NSMutableDictionary<NSNumber *, CoreProtocol *> *gLoads;
+static NSMutableDictionary<NSNumber *, SFCoreProtocol *> *gLoads;
 /// The core's root certificate, which signs the certificates the core shows for the sites it fixes.
 static NSArray *gRoots;
 
-@interface CoreProtocol : NSURLProtocol
+@interface SFCoreProtocol : NSURLProtocol
 @property (nonatomic, strong) NSURLSessionDataTask *task;
 @property (nonatomic, strong) NSThread *thread;
 @property (nonatomic, copy) NSArray<NSString *> *modes;
@@ -166,7 +124,7 @@ static NSArray *gRoots;
 - (void)onClientThread:(dispatch_block_t)block;
 @end
 
-@implementation CoreProtocol
+@implementation SFCoreProtocol
 
 + (BOOL)canInitWithRequest:(NSURLRequest *)request {
     NSString *scheme = request.URL.scheme.lowercaseString;
@@ -209,14 +167,14 @@ static NSArray *gRoots;
 @end
 
 /// Passes the session's events to the protocol instance of each task.
-@interface SessionDelegate : NSObject <NSURLSessionDataDelegate>
+@interface SFSessionDelegate : NSObject <NSURLSessionDataDelegate>
 @end
 
-@implementation SessionDelegate
+@implementation SFSessionDelegate
 
-static CoreProtocol *LoadOf(NSURLSessionTask *task, BOOL remove) {
+static SFCoreProtocol *LoadOf(NSURLSessionTask *task, BOOL remove) {
     @synchronized (gLoads) {
-        CoreProtocol *load = gLoads[@(task.taskIdentifier)];
+        SFCoreProtocol *load = gLoads[@(task.taskIdentifier)];
         if (remove) [gLoads removeObjectForKey:@(task.taskIdentifier)];
         return load;
     }
@@ -238,8 +196,8 @@ static CoreProtocol *LoadOf(NSURLSessionTask *task, BOOL remove) {
         (result == kSecTrustResultUnspecified || result == kSecTrustResultProceed)) {
         completion(NSURLSessionAuthChallengeUseCredential, [NSURLCredential credentialForTrust:trust]);
     } else {
-        DebugApp([NSString stringWithFormat:@"untrusted certificate for %@ (%u)", challenge.protectionSpace.host,
-                  (unsigned)result]);
+        SFDebugApp([NSString stringWithFormat:@"untrusted certificate for %@ (%u)", challenge.protectionSpace.host,
+                    (unsigned)result]);
         completion(NSURLSessionAuthChallengeCancelAuthenticationChallenge, nil);
     }
 }
@@ -248,12 +206,12 @@ static CoreProtocol *LoadOf(NSURLSessionTask *task, BOOL remove) {
     willPerformHTTPRedirection:(NSHTTPURLResponse *)response newRequest:(NSURLRequest *)request
              completionHandler:(void (^)(NSURLRequest *))completion {
     // The web view follows redirects itself, so it shows the new URL and its request comes back through the protocol.
-    CoreProtocol *load = LoadOf(task, NO);
+    SFCoreProtocol *load = LoadOf(task, NO);
     NSMutableURLRequest *next = [request mutableCopy];
     [NSURLProtocol removePropertyForKey:kHandled inRequest:next];
     load.redirected = YES;
-    DebugRequest(load.request.HTTPMethod, load.request.URL, response.statusCode, nil, 0,
-                 CFAbsoluteTimeGetCurrent() - load.started, nil, NO, request.URL);
+    SFDebugRequest(load.request.HTTPMethod, load.request.URL, response.statusCode, nil, 0,
+                   CFAbsoluteTimeGetCurrent() - load.started, nil, NO, request.URL);
     [load onClientThread:^{
         [load.client URLProtocol:load wasRedirectedToRequest:next redirectResponse:response];
         [load.client URLProtocol:load didFailWithError:[NSError errorWithDomain:NSCocoaErrorDomain
@@ -266,7 +224,7 @@ static CoreProtocol *LoadOf(NSURLSessionTask *task, BOOL remove) {
 - (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)task
     didReceiveResponse:(NSURLResponse *)response
      completionHandler:(void (^)(NSURLSessionResponseDisposition))completion {
-    CoreProtocol *load = LoadOf(task, NO);
+    SFCoreProtocol *load = LoadOf(task, NO);
     load.status = [response isKindOfClass:[NSHTTPURLResponse class]] ? ((NSHTTPURLResponse *)response).statusCode : 0;
     load.type = response.MIMEType;
     if (!load.redirected) {
@@ -279,17 +237,17 @@ static CoreProtocol *LoadOf(NSURLSessionTask *task, BOOL remove) {
 }
 
 - (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)task didReceiveData:(NSData *)data {
-    CoreProtocol *load = LoadOf(task, NO);
+    SFCoreProtocol *load = LoadOf(task, NO);
     load.bytes += data.length;
     if (!load.redirected) [load onClientThread:^{ [load.client URLProtocol:load didLoadData:data]; }];
 }
 
 - (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
-    CoreProtocol *load = LoadOf(task, YES);
+    SFCoreProtocol *load = LoadOf(task, YES);
     if (!load || load.redirected) return;
     BOOL cancelled = load.stopped && error.code == NSURLErrorCancelled;
-    DebugRequest(load.request.HTTPMethod, load.request.URL, load.status, load.type, load.bytes,
-                 CFAbsoluteTimeGetCurrent() - load.started, error, cancelled, nil);
+    SFDebugRequest(load.request.HTTPMethod, load.request.URL, load.status, load.type, load.bytes,
+                   CFAbsoluteTimeGetCurrent() - load.started, error, cancelled, nil);
     [load onClientThread:^{
         if (error) {
             [load.client URLProtocol:load didFailWithError:error];
@@ -301,97 +259,56 @@ static CoreProtocol *LoadOf(NSURLSessionTask *task, BOOL remove) {
 
 @end
 
-@interface AppDelegate : UIResponder <UIApplicationDelegate, UIWebViewDelegate, UITextFieldDelegate>
-@property (nonatomic, strong) UIWindow *window;
-@end
-
-@implementation AppDelegate {
-    UIWebView *_web;
-    UITextField *_address;
-    UIButton *_back;
-}
-
-- (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+void SFBrowserStart(int port, NSData *root) {
     // Before the first web view, which reads it once.
     [[NSUserDefaults standardUserDefaults] registerDefaults:@{@"UserAgent": kUserAgent}];
-    NSString *debug = [self folder:NSCachesDirectory named:@"debug"];
-    DebugStart(debug, ^{
-        __block NSString *status;
-        OnCore(YES, ^{ status = TakeString(SFStatus()); });
-        return status;
-    }, ^{
-        __block NSString *log;
-        OnCore(YES, ^{ log = TakeString(SFRecentLog()); });
-        return log;
-    });
-    DebugApp(@"start");
-
-    self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-    UIViewController *root = [UIViewController new];
-    root.view.backgroundColor = [UIColor colorWithRed:0.97 green:0.97 blue:0.97 alpha:1];
-    [self buildScreenIn:root.view];
-    self.window.rootViewController = root;
-    [self.window makeKeyAndVisible];
-    _address.text = @"Starting…";
-    _address.enabled = NO;
-
-    NSString *data = [self folder:NSApplicationSupportDirectory named:@"SafariFix"];
-    NSString *cache = [self folder:NSCachesDirectory named:@"scripts"];
-    CFAbsoluteTime starting = CFAbsoluteTimeGetCurrent();
-    BOOL firstRun = ![[NSFileManager defaultManager] contentsOfDirectoryAtPath:data error:nil].count;
-    OnCore(NO, ^{
-        // The core serves the debug record under /debug/, for the PC over USB.
-        SFSetTimeZone((int)[NSTimeZone localTimeZone].secondsFromGMT);
-        NSString *error = TakeString(SFStart((char *)data.UTF8String, (char *)cache.UTF8String,
-                                             (char *)debug.UTF8String, kPort));
-        NSString *chain = error ? nil : TakeString(SFTestChain());
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (error) {
-                DebugApp([@"core FAILED to start: " stringByAppendingString:error]);
-                self->_address.text = [@"Core failed: " stringByAppendingString:error];
-                return;
-            }
-            [self startSessionWithChain:chain];
-            [NSURLProtocol registerClass:[CoreProtocol class]];
-            // On the first run the core also makes its root key, which takes a while.
-            DebugApp([NSString stringWithFormat:@"core started in %.1f s%@", CFAbsoluteTimeGetCurrent() - starting,
-                                                firstRun ? @", with a new root key" : @""]);
-            self->_address.enabled = YES;
-            self->_address.text = @"";
-            [self->_address becomeFirstResponder];
-        });
-    });
-    return YES;
-}
-
-- (void)startSessionWithChain:(NSString *)chain {
-    // The root is the last of SFTestChain's lines.
-    NSString *root = [chain componentsSeparatedByString:@"\n"].lastObject;
-    NSData *der = [[NSData alloc] initWithBase64EncodedString:root options:0];
-    gRoots = @[CFBridgingRelease(SecCertificateCreateWithData(NULL, (__bridge CFDataRef)der))];
+    SecCertificateRef cert = root ? SecCertificateCreateWithData(NULL, (__bridge CFDataRef)root) : NULL;
+    gRoots = cert ? @[CFBridgingRelease(cert)] : @[];
     gLoads = [NSMutableDictionary dictionary];
 
     NSURLSessionConfiguration *config = [NSURLSessionConfiguration defaultSessionConfiguration];
     config.connectionProxyDictionary = @{
-        @"HTTPEnable": @YES, @"HTTPProxy": @"127.0.0.1", @"HTTPPort": @(kPort),
-        @"HTTPSEnable": @YES, @"HTTPSProxy": @"127.0.0.1", @"HTTPSPort": @(kPort),
+        @"HTTPEnable": @YES, @"HTTPProxy": @"127.0.0.1", @"HTTPPort": @(port),
+        @"HTTPSEnable": @YES, @"HTTPSProxy": @"127.0.0.1", @"HTTPSPort": @(port),
     };
     config.HTTPMaximumConnectionsPerHost = 6;
     NSOperationQueue *queue = [NSOperationQueue new];
     queue.maxConcurrentOperationCount = 1;
-    gSession = [NSURLSession sessionWithConfiguration:config delegate:[SessionDelegate new] delegateQueue:queue];
+    gSession = [NSURLSession sessionWithConfiguration:config delegate:[SFSessionDelegate new] delegateQueue:queue];
+    [NSURLProtocol registerClass:[SFCoreProtocol class]];
 }
 
-- (void)buildScreenIn:(UIView *)view {
+static UIButton *BarButton(NSString *title, CGFloat size, CGRect frame, id target, SEL action) {
+    UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+    button.frame = frame;
+    button.titleLabel.font = [UIFont systemFontOfSize:size];
+    [button setTitle:title forState:UIControlStateNormal];
+    [button addTarget:target action:action forControlEvents:UIControlEventTouchUpInside];
+    return button;
+}
+
+@interface SFBrowserViewController () <UIWebViewDelegate, UITextFieldDelegate>
+@end
+
+@implementation SFBrowserViewController {
+    UIWebView *_web;
+    UITextField *_address;
+    UIButton *_back;
+    // The page the browser let go of in the background, to open again when it shows.
+    NSURL *_unloaded;
+    NSTimer *_unloadTimer;
+}
+
+- (void)loadView {
+    UIView *view = [[UIView alloc] initWithFrame:[UIScreen mainScreen].bounds];
+    view.backgroundColor = [UIColor colorWithRed:0.97 green:0.97 blue:0.97 alpha:1];
     CGFloat width = view.bounds.size.width;
-    _back = [UIButton buttonWithType:UIButtonTypeSystem];
-    _back.frame = CGRectMake(4, 24, 36, 32);
-    _back.titleLabel.font = [UIFont systemFontOfSize:28];
-    [_back setTitle:@"‹" forState:UIControlStateNormal];
-    [_back addTarget:self action:@selector(goBack) forControlEvents:UIControlEventTouchUpInside];
+    [view addSubview:BarButton(@"Done", 15, CGRectMake(4, 24, 46, 32), self, @selector(done))];
+    _back = BarButton(@"‹", 28, CGRectMake(50, 24, 28, 32), self, @selector(goBack));
+    _back.enabled = NO;
     [view addSubview:_back];
 
-    _address = [[UITextField alloc] initWithFrame:CGRectMake(44, 24, width - 108, 32)];
+    _address = [[UITextField alloc] initWithFrame:CGRectMake(80, 24, width - 140, 32)];
     _address.borderStyle = UITextBorderStyleRoundedRect;
     _address.font = [UIFont systemFontOfSize:15];
     _address.placeholder = @"Search or enter website";
@@ -403,20 +320,77 @@ static CoreProtocol *LoadOf(NSURLSessionTask *task, BOOL remove) {
     _address.delegate = self;
     [view addSubview:_address];
 
-    UIButton *details = [UIButton buttonWithType:UIButtonTypeSystem];
-    details.frame = CGRectMake(width - 60, 24, 56, 32);
-    details.titleLabel.font = [UIFont systemFontOfSize:15];
-    [details setTitle:@"Debug" forState:UIControlStateNormal];
-    [details addTarget:self action:@selector(showDetails) forControlEvents:UIControlEventTouchUpInside];
-    [view addSubview:details];
+    [view addSubview:BarButton(@"Debug", 15, CGRectMake(width - 58, 24, 54, 32), self, @selector(showDetails))];
+    self.view = view;
+    [self makeWebView];
 
-    _web = [[UIWebView alloc] initWithFrame:CGRectMake(0, 62, width, view.bounds.size.height - 62)];
+    NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+    [center addObserver:self selector:@selector(didEnterBackground) name:UIApplicationDidEnterBackgroundNotification
+                 object:nil];
+    [center addObserver:self selector:@selector(willEnterForeground) name:UIApplicationWillEnterForegroundNotification
+                 object:nil];
+    [center addObserver:self selector:@selector(memoryWarning) name:UIApplicationDidReceiveMemoryWarningNotification
+                 object:nil];
+}
+
+- (void)makeWebView {
+    CGSize size = self.view.bounds.size;
+    _web = [[UIWebView alloc] initWithFrame:CGRectMake(0, 62, size.width, size.height - 62)];
     _web.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     _web.scalesPageToFit = YES;
     _web.allowsInlineMediaPlayback = YES;
     _web.delegate = self;
-    [view addSubview:_web];
+    [self.view addSubview:_web];
     WatchWebKit(_web);
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self openUnloaded];
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    if (!_web.request && !_unloaded) [_address becomeFirstResponder];
+}
+
+- (void)didEnterBackground {
+    [_unloadTimer invalidate];
+    _unloadTimer = [NSTimer scheduledTimerWithTimeInterval:kKeepInBackground target:self selector:@selector(unload)
+                                                  userInfo:nil repeats:NO];
+}
+
+- (void)willEnterForeground {
+    [_unloadTimer invalidate];
+    _unloadTimer = nil;
+    if (self.view.window) [self openUnloaded];
+}
+
+- (void)memoryWarning {
+    if ([UIApplication sharedApplication].applicationState == UIApplicationStateBackground) [self unload];
+}
+
+/// Lets go of the page, with its web view, and keeps its address to open it again.
+- (void)unload {
+    [_unloadTimer invalidate];
+    _unloadTimer = nil;
+    NSURL *url = _web.request.mainDocumentURL;
+    if (!_web || !url) return;
+    _unloaded = url;
+    _web.delegate = nil;
+    [_web stopLoading];
+    [_web removeFromSuperview];
+    _web = nil;
+    _back.enabled = NO;
+    SFDebugApp([@"let go of the page in the background: " stringByAppendingString:SFDebugShortURL(url)]);
+}
+
+- (void)openUnloaded {
+    if (!_unloaded) return;
+    NSURL *url = _unloaded;
+    _unloaded = nil;
+    [self makeWebView];
+    [_web loadRequest:[NSURLRequest requestWithURL:url]];
 }
 
 - (BOOL)textFieldShouldReturn:(UITextField *)field {
@@ -431,8 +405,15 @@ static CoreProtocol *LoadOf(NSURLSessionTask *task, BOOL remove) {
         url = [NSURL URLWithString:[@"https://www.google.com/search?q=" stringByAppendingString:query]];
     }
     [field resignFirstResponder];
+    _unloaded = nil;
+    if (!_web) [self makeWebView];
     [_web loadRequest:[NSURLRequest requestWithURL:url]];
     return NO;
+}
+
+- (void)done {
+    [_address resignFirstResponder];
+    [self dismissViewControllerAnimated:YES completion:nil];
 }
 
 - (void)goBack {
@@ -440,14 +421,14 @@ static CoreProtocol *LoadOf(NSURLSessionTask *task, BOOL remove) {
 }
 
 - (void)showDetails {
-    SFDetailsViewController *details = [[SFDetailsViewController alloc] initWithText:^{ return DebugDetails(); }];
-    [self.window.rootViewController presentViewController:[[UINavigationController alloc] initWithRootViewController:details]
-                                                 animated:YES completion:nil];
+    SFDetailsViewController *details = [[SFDetailsViewController alloc] initWithText:^{ return SFDebugDetails(); }];
+    [self presentViewController:[[UINavigationController alloc] initWithRootViewController:details] animated:YES
+                     completion:nil];
 }
 
 - (BOOL)webView:(UIWebView *)web shouldStartLoadWithRequest:(NSURLRequest *)request
  navigationType:(UIWebViewNavigationType)type {
-    if ([request.URL isEqual:request.mainDocumentURL]) DebugPageStarted(request.URL);
+    if ([request.URL isEqual:request.mainDocumentURL]) SFDebugPageStarted(request.URL);
     return YES;
 }
 
@@ -461,29 +442,14 @@ static CoreProtocol *LoadOf(NSURLSessionTask *task, BOOL remove) {
     NSString *url = web.request.mainDocumentURL.absoluteString;
     if (!_address.isEditing && url) _address.text = url;
     _back.enabled = web.canGoBack;
-    DebugPageFinished(web.request.mainDocumentURL);
+    SFDebugPageFinished(web.request.mainDocumentURL);
 }
 
 - (void)webView:(UIWebView *)web didFailLoadWithError:(NSError *)error {
     // Cancelled loads, the protocol's redirects, and WebKit's own interruptions aren't failures.
     if (error.code == NSURLErrorCancelled || error.code == NSUserCancelledError ||
         [error.domain isEqualToString:@"WebKitErrorDomain"]) return;
-    DebugPageFailed(error);
-}
-
-- (NSString *)folder:(NSSearchPathDirectory)directory named:(NSString *)name {
-    NSString *path = [NSSearchPathForDirectoriesInDomains(directory, NSUserDomainMask, YES).firstObject
-                      stringByAppendingPathComponent:name];
-    [[NSFileManager defaultManager] createDirectoryAtPath:path withIntermediateDirectories:YES attributes:nil error:nil];
-    return path;
+    SFDebugPageFailed(error);
 }
 
 @end
-
-int main(int argc, char *argv[]) {
-    // A peer that closes mid-send must fail the send, not kill the app.
-    signal(SIGPIPE, SIG_IGN);
-    @autoreleasepool {
-        return UIApplicationMain(argc, argv, nil, NSStringFromClass([AppDelegate class]));
-    }
-}
