@@ -1,39 +1,52 @@
 # SafariFix
 
-An iPhone 5 stops at iOS 10.3.4, and its Safari 10.1 still searches Google and plays YouTube. Many other sites now send JavaScript newer than Safari 10.1 can parse, or call web APIs it lacks. Their pages stay blank or half-working, and the phone gets no newer Safari.
+An iPhone 5 stops at iOS 10.3.4, and its Safari 10.1 still searches Google and plays YouTube. Many other sites now send JavaScript newer than Safari 10.1 can parse, or call web APIs it lacks. Their pages stay blank or half-working, and Safari 10.1 is the phone's last Safari.
 
-SafariFix fixes each page on its way to Safari: a proxy rewrites the new syntax into what Safari 10.1 reads, adds the missing APIs, and passes Google, YouTube and Apple through untouched. The proxy runs in the SafariFix app on the phone alone, signed with a free Apple ID as [CleanCam](https://github.com/dogkeeper886/cleancam) is. A test bench on a Linux PC and two test apps came first.
+SafariFix fixes each page on its way to the browser: a proxy rewrites the new syntax into what Safari 10.1 reads, adds the missing APIs, and passes Google, YouTube and Apple through untouched. The SafariFix app runs the proxy on the phone, with no PC, for its own browser and for Safari; a free Apple ID signs it, as it signs [CleanCam](https://github.com/dogkeeper886/cleancam). A test bench on a Linux PC and two test apps came first.
 
 ## The SafariFix app
 
-The app runs the proxy on `127.0.0.1:8118`, and Safari reaches it through a PAC file. The proxy is `core/`, in Go 1.14, the last Go for 32-bit iPhones, built into the app as a C library; `ios/app/` wraps it in an Objective-C app that plays a silent sound to keep running behind Safari. It passes Google search, YouTube and Apple's services through untouched, adds only `AbortController` to Google's sign-in pages, and rewrites every other site's scripts with esbuild on the phone. The app also has a browser of its own, which goes through the same proxy without any setup, and keeps a debug record of what each page did.
+The app runs the proxy on `127.0.0.1:8118`, and Safari reaches it through a PAC file. The proxy, `core/`, is in Go 1.14, the last Go for 32-bit iPhones, and links into the app as a C library; `ios/app/` wraps it in an Objective-C app that plays a silent sound to keep running behind Safari. It passes Google search, YouTube and Apple's services through untouched, adds only `AbortController` to Google's sign-in pages, and rewrites every other site's scripts with esbuild on the phone. The app also has a browser of its own, which uses the same proxy from the first launch. The app records what each page did, for debugging.
 
 ### Set up the app
 
 1. **Build the IPA** on the Linux PC with `ios/build.sh`, which writes `build/SafariFix.ipa`. It needs podman or docker, curl, git, zip and python3, and downloads its pinned Go, esbuild, SDK, toolchain and polyfills into `build/` on the first run.
-2. **Sign and install** it as the test apps below, with `build/SafariFix.ipa` in step 3.
-3. **Open SafariFix.** The first launch makes the root certificate, which can take a minute. The screen then shows "Ready".
-4. **Browse** in its own browser: tap "Open the browser". It needs no more setup, on any network.
+2. **Connect the iPhone** straight to the PC, since usbmuxd lists the phone only on a direct cable. Unlock it and tap "Trust This Computer".
+3. **Sign and install** from this repo's root with CleanCam's `tools/plumesign.sh`, here from a CleanCam clone beside this one:
+   ```sh
+   ../cleancam/tools/plumesign.sh sign --package build/SafariFix.ipa --apple-id --register-and-install \
+     --udid "$(tools/iphone.sh idevice_id -l < /dev/null | head -1)"
+   ```
+   Log in first with `../cleancam/tools/plumesign.sh account login -u <your Apple ID>`, as CleanCam's README describes.
+4. **Trust the developer** in Settings → General → Device Management.
+5. **Open SafariFix.** The first launch makes the root certificate, which can take a minute. The screen then shows "Ready".
+6. **Browse** in its own browser: tap "Open the browser". It works from here, on any network.
 
 To use Safari as well, take the two steps the screen lists under "To use Safari as well", which it checks every 2 seconds while it's in front:
 
-5. **Install the certificate:** tap "Install in Safari", then "Install the certificate" on the page, Allow and Install.
-6. **Trust it** in Settings → General → About → Certificate Trust Settings: turn on the SafariFix root the page names, "SafariFix root" and six hex digits, and tap Continue on the warning. Until its switch is on, Safari can't open any site the app fixes.
-7. **Point Safari at it:** tap "Copy the address", then in Settings → Wi-Fi → ⓘ → HTTP Proxy → Auto, paste it as the URL, `http://127.0.0.1:8118/proxy.pac`. The steps go once both are done. iOS has no such setting for mobile data, so Safari is fixed only on the Wi-Fi networks set this way.
+7. **Install the certificate:** tap "Install in Safari", then "Install the certificate" on the page, "Allow" and "Install".
+8. **Trust it** in Settings → General → About → Certificate Trust Settings: turn on the SafariFix root the page names, "SafariFix root" and six hex digits, and tap "Continue" on the warning. Safari opens the sites the app fixes only once this switch is on.
+9. **Point Safari at it:** tap "Copy the address", then in Settings → Wi-Fi → ⓘ → HTTP Proxy → Auto, paste it as the URL, `http://127.0.0.1:8118/proxy.pac`. The screen hides the steps once both are done. iOS offers this setting for Wi-Fi alone, so SafariFix fixes Safari only on the Wi-Fi networks set this way.
 
-- **Keep it running** for Safari: in the app switcher, swipe away only Safari, never SafariFix. While SafariFix isn't running, Safari reaches the internet directly through the PAC file's fallback, with pages unfixed.
-- **Renew:** a free Apple ID signs the app for 7 days, and the screen shows until when. Repeat step 2 with the same IPA; the root certificate and its trust stay.
-- **The app's log:** read it with `tools/inspect.sh log | grep SafariFix`, from [Measure a page on the phone](#measure-a-page-on-the-phone). A 30-second heartbeat shows the app running; after a crash, the next launch logs Go's last words as "last run's stderr". Details, on the main screen, shows what the checks found and the debug record below, and copies them in one tap.
-- **The browser:** "Open the browser" on the main screen opens a bare browser, a UIWebView whose requests go through the proxy inside the app, so it needs neither the proxy setting nor the certificate. Its JavaScript runs without the JIT, slower than Safari's. Two minutes after you leave the app, or at once on a memory warning, it lets go of its page, so that iOS keeps SafariFix running for Safari; it opens the page again when you come back.
+- **The browser:** "Open the browser" on the main screen opens a bare browser, a UIWebView whose requests go through the proxy inside the app, so it skips both of Safari's steps. Its address bar takes an address, or words to search Google. Its JavaScript runs in the interpreter, slower than Safari's JIT. Two minutes after you leave the app, or at once on a memory warning, it lets go of its page, so that iOS keeps SafariFix running for Safari; it opens the page again when you come back.
+- **What the browser keeps:** sign-ins and the sites' storage (cookies, localStorage, IndexedDB and WebSQL) stay in SafariFix's own data, apart from Safari's, so you sign in to each site here and in Safari separately. It keeps sign-ins, not passwords: you type yours at each sign-in. Its cache is iOS's small default, so large scripts download again on each visit. It holds one page, with a Back button and an address bar.
+- **Keep it running** for Safari: in the app switcher, swipe away only Safari, and leave SafariFix. While SafariFix is closed, Safari reaches the internet directly through the PAC file's fallback, and pages arrive unfixed.
+- **Renew:** a free Apple ID signs the app for 7 days, and the main screen shows the end date. Repeat step 3 with the same IPA; the root certificate, its trust and the browser's sign-ins stay.
+- **"Maximum number of apps":** a free Apple ID's profiles allow 3 apps at once, and an install past that fails with this message. Uninstall another app first: `tools/iphone.sh ideviceinstaller -l` lists the bundle IDs, and `tools/iphone.sh ideviceinstaller -U <bundle ID>` removes one, with its data. Keep SafariFix installed: uninstalling it deletes its root certificate and the browser's sign-ins.
+- **An app that won't open after install:** iOS checks the developer with Apple over the internet, and shows the untrusted-developer alert while that check fails or times out. Tap Verify App in Settings → General → Device Management again.
+
+To work on the app:
+
+- **The app's log:** read it with `tools/inspect.sh log | grep SafariFix`, from [Measure a page on the phone](#measure-a-page-on-the-phone). A 30-second heartbeat shows the app running; after a crash, the app logs Go's last words at its next launch, as "last run's stderr". Details, on the main screen, shows what the checks found and the debug record below; its "Copy" button copies both.
 - **A debug build:** `DEBUG=1 ios/build.sh` writes `build/SafariFix-debug.ipa`, which also saves pictures of its main screen in each state into the debug record's folder, as `screen.png` and `state-ready.png` and so on.
 - **Change the core:** `core/go.sh test ./...` runs its tests, and `GOARCH=386 CGO_ENABLED=0 core/go.sh test ./certs ./fix ./proxy ./rules` runs them on 32 bits, which catches what crashes the iPhone 5. `core/go.sh run ./cmd/safarifix-pc` runs the same proxy on the PC for the phone to use over the Wi-Fi.
 
 ### Read the app's debug record
 
-The record is a timeline of the app's events, each page the browser opened with its requests, script errors and WebKit's own messages, and the app's memory. Details on the main screen shows its last lines, and Debug in the browser shows it too; the proxy serves the whole record for the PC.
+The record lists in time order the app's events, each page the browser opened with its requests, script errors and WebKit's own messages, and the app's memory. Details on the main screen and Debug in the browser show its last lines, and the proxy serves the whole record to the PC.
 
 1. **Forward the proxy's port** over USB with `DETACH=iproxy tools/iphone.sh iproxy 18118:8118`.
-2. **Read the record** at `http://127.0.0.1:18118/debug/`: `log.txt` holds the timeline; `summary.txt` the counts; `core.txt` the core's log; and `previous.txt` the last run's timeline, to read after a crash. The proxy serves it only under `127.0.0.1` or `localhost`, so that a website can't read it under its own name.
+2. **Read the record** at `http://127.0.0.1:18118/debug/`: `log.txt` holds the timeline; `summary.txt` the counts; `core.txt` the core's log; and `previous.txt` the last run's timeline, to read after a crash. The proxy serves it only under `127.0.0.1` or `localhost`, which keeps a website from reading it under its own name.
 3. **Drive the browser** with the probe from [Measure a page on the phone](#measure-a-page-on-the-phone): once a page has loaded, `curl localhost:9222/json` lists its web view, and `tools/iphone.sh python3 tools/probe.py --ws ws://localhost:9222/devtools/page/<n> <url>` opens a URL in it.
 
 ## The PC bench
@@ -45,9 +58,9 @@ The bench fixes each page while the iPhone loads it: the iPhone uses the bench, 
 ![On the Linux PC: 1, start the bench with bench/run.sh, with port 8080 open. On the iPhone 5: 2, point Wi-Fi's HTTP Proxy at the PC, Manual, port 8080; 3, install the certificate from http://mitm.it as an iOS profile; 4, trust it in About, Certificate Trust Settings; 5, clear Safari's history and website data; 6, browse, and set HTTP Proxy to Off when the bench stops. After a change to bench/, restart bench/run.sh on the PC and repeat step 5.](docs/images/bench-steps.png)
 
 1. **Start the bench** on the PC with `bench/run.sh`. It needs podman or docker and listens on port 8080. Open that port in the PC's firewall for the phone.
-2. **Point the iPhone at it** in Settings → Wi-Fi → (i) → HTTP Proxy → Manual: the PC's IP, port 8080.
+2. **Point the iPhone at it** in Settings → Wi-Fi → ⓘ → HTTP Proxy → Manual: the PC's IP, port 8080.
 3. **Install the bench's certificate:** open `http://mitm.it` in Safari and install the iOS profile.
-4. **Trust it** in Settings → General → About → Certificate Trust Settings. Until then, Safari fails every site the bench decrypts.
+4. **Trust it** in Settings → General → About → Certificate Trust Settings. Safari opens the sites the bench decrypts only after this step.
 5. **Clear Safari's cache** in Settings → Safari → Clear History and Website Data, since Safari keeps the unfixed scripts.
 6. **Browse.** Set HTTP Proxy back to Off when the bench stops, since Safari reaches the internet only through it.
 
@@ -65,7 +78,7 @@ The bench fixes each page while the iPhone loads it: the iPhone uses the bench, 
 The bench works only while the PC runs and the phone shares its Wi-Fi. A phone that browses on its own needs the proxy inside an app. But iOS keeps an app from starting another program and suspends it in the background, and Apple's current tools build iOS apps for 64-bit iPhones only. Two test apps, built on the Linux PC, try the parts on the iPhone 5:
 
 - **esbuild-test** (`spike/esbuild-ios`) links esbuild into the app as a Go library and times it on sample scripts.
-- **proxy-test** (`spike/proxy-ios`) runs a proxy on `127.0.0.1:8118` that Safari reaches through a PAC file, and keeps running in the background with a silent sound. It passes HTTPS through still encrypted, so every page reaches Safari unfixed for now.
+- **proxy-test** (`spike/proxy-ios`) runs a proxy on `127.0.0.1:8118` that Safari reaches through a PAC file, and keeps running in the background with a silent sound. It passes HTTPS through still encrypted, so every page reaches Safari unfixed.
 
 ### Build an app
 
@@ -85,13 +98,12 @@ The bench works only while the PC runs and the phone shares its Wi-Fi. A phone t
    Log in first with `../cleancam/tools/plumesign.sh account login -u <your Apple ID>`, as CleanCam's README describes.
 4. **Trust the developer** in Settings → General → Device Management.
 5. **Open the app.** It starts its proxy or its timing run at launch, and shows each line on its screen.
-6. **Point Safari at proxy-test** in Settings → Wi-Fi → (i) → HTTP Proxy → Auto, with the URL `http://127.0.0.1:8118/proxy.pac`. This replaces the bench's Manual setting.
+6. **Point Safari at proxy-test** in Settings → Wi-Fi → ⓘ → HTTP Proxy → Auto, with the URL `http://127.0.0.1:8118/proxy.pac`. This replaces the bench's Manual setting.
 
 - **Renew:** a free Apple ID signs the app for 7 days. Repeat step 3 with the same IPA.
 - **After a change to the app:** repeat steps 1, 3 and 5, since the app starts its proxy only at launch.
 - **The app's log:** each line also goes to the phone's log, prefixed with the app's name. Read it with `tools/inspect.sh log | grep proxy-test:`, from the next section.
-- **"Maximum number of apps":** a free Apple ID's profiles allow only a few apps at once, and an update can fail with this. Uninstall the old copy first: `tools/iphone.sh ideviceinstaller -l` lists the bundle IDs, and `tools/iphone.sh ideviceinstaller -U <bundle ID>` removes one, with its data. Never uninstall SafariFix this way, since its root certificate goes with it.
-- **An app that won't open after install:** iOS checks the developer with Apple over the internet, and shows the untrusted-developer alert while that check fails or times out. Tap Verify App in Settings → General → Device Management again.
+- **"Maximum number of apps", or an app that won't open after install:** see SafariFix's notes in [Set up the app](#set-up-the-app).
 
 ## Measure a page on the phone
 
