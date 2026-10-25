@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The esbuild build test: compiles esbuild v0.28.2 with Go 1.14, the last Go release for 32-bit iPhones,
 # into a test app for the iPhone 5 that times esbuild on sample scripts. Writes build/esbuild-test.ipa,
-# unsigned; sign and install it with CleanCam's tools/plumesign.sh.
+# unsigned; sign and install it with tools/phone/plumesign.sh.
 #   spike/esbuild-ios/build.sh [SAMPLE.js ...]   the scripts to time (default: three.js 0.170.0's module build)
 # Runs on Linux: Go, and clang and Apple's ld64 from the theos project's iOS toolchain, run in a container,
 # against the iOS 11.4 SDK, the last with 32-bit ARM. All of them download once into build/.

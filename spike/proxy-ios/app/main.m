@@ -7,7 +7,7 @@
 
 // The proxy test app: runs Proxy on 127.0.0.1:8118 and keeps itself running in the background with a silent
 // audio loop, so Safari can use it while Safari is in front. Every 30 seconds it logs a heartbeat to the phone's
-// log, prefixed "proxy-test:", for tools/inspect.sh log; a gap in the heartbeats means iOS suspended the app.
+// log, prefixed "proxy-test:", for tools/phone/log.sh; a gap in the heartbeats means iOS suspended the app.
 
 static const uint16_t kPort = 8118;
 

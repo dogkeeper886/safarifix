@@ -4,7 +4,7 @@
 #include "libesbuild.h"
 
 // The build test app: rewrites each bundled sample script with esbuild three times and shows how long each run
-// took. Each line also goes to the phone's log, prefixed "esbuild-test:", for tools/inspect.sh log.
+// took. Each line also goes to the phone's log, prefixed "esbuild-test:", for tools/phone/log.sh.
 @interface AppDelegate : UIResponder <UIApplicationDelegate>
 @property (nonatomic, strong) UIWindow *window;
 @end
