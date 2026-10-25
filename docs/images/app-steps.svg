@@ -51,7 +51,7 @@
   <circle class="badge" cx="58" cy="224" r="12"/>
   <text class="num" x="58" y="228.5" text-anchor="middle">3</text>
   <text class="title" x="194" y="246" text-anchor="middle">Sign and install</text>
-  <text class="sub" x="194" y="264" text-anchor="middle">CleanCam's plumesign.sh, free Apple ID</text>
+  <text class="sub" x="194" y="264" text-anchor="middle">tools/phone/plumesign.sh, free Apple ID</text>
 
   <!-- 4 -->
   <rect class="box" x="416" y="304" width="300" height="52" rx="8"/>
@@ -82,7 +82,7 @@
   <!-- Read the log -->
   <rect class="box" x="44" y="464" width="300" height="52" rx="8"/>
   <text class="title" x="194" y="486" text-anchor="middle">Read the app's lines</text>
-  <text class="sub" x="194" y="504" text-anchor="middle">tools/inspect.sh log | grep proxy-test:</text>
+  <text class="sub" x="194" y="504" text-anchor="middle">tools/phone/log.sh | grep proxy-test:</text>
 
   <!-- Edges -->
   <path class="edge" d="M344,90 H566 V144" marker-end="url(#arrow)"/>

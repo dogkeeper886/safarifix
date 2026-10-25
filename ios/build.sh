@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Builds SafariFix for the iPhone 5 on iOS 10 into build/SafariFix.ipa, unsigned; sign and install it with CleanCam's
-# tools/plumesign.sh. DEBUG=1 builds build/SafariFix-debug.ipa instead, which also saves pictures of its main screen
-# for the proxy to serve on http://127.0.0.1:8118/debug/ (see ios/app/main.m). The core builds with Go 1.14, the
-# last Go for 32-bit iPhones, as a C library that links into the Objective-C app in ios/app/; with a copy of Go that
+# Builds SafariFix for the iPhone 5 on iOS 10 into build/SafariFix.ipa, unsigned; sign and install it with
+# tools/phone/plumesign.sh. DEBUG=1 builds build/SafariFix-debug.ipa instead, which also saves pictures of its main
+# screen for the proxy to serve on http://127.0.0.1:8118/debug/ (see ios/app/main.m). The core builds with Go 1.14,
+# the last Go for 32-bit iPhones, as a C library that links into the Objective-C app in ios/app/; with a copy of Go that
 # reserves less of the app's address space, which the browser's web view needs (see deps_small_go in tools/deps.sh).
 # Runs on Linux: Go, and clang and Apple's ld64 from the theos project's iOS toolchain, run in a container against
 # the iOS 11.4 SDK. Everything downloads once into build/ (see tools/deps.sh).

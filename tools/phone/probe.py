@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Opens sites in Safari's tab on the iPhone through ios_webkit_debug_proxy and reports what each page did:
+"""Opens sites in a web page on the iPhone through ios_webkit_debug_proxy and reports what each page did:
 the failed requests, the console errors and a snapshot of the page.
-  tools/iphone.sh python3 tools/probe.py https://shopee.tw/          details for one site
-  tools/iphone.sh python3 tools/probe.py --summary URL [URL ...]     a short block per site
-  tools/iphone.sh python3 tools/probe.py --wait 3 --eval EXPR        the open page, without navigating
-Start the proxy first with tools/inspect.sh start, and keep Safari open in front on the phone."""
+  tools/phone/iphone.sh python3 tools/phone/probe.py https://shopee.tw/        details for one site
+  tools/phone/iphone.sh python3 tools/phone/probe.py --summary URL [URL ...]   a short block per site
+  tools/phone/iphone.sh python3 tools/phone/probe.py --wait 3 --eval EXPR      the open page, without navigating
+Start the inspector first with tools/phone/run.sh, and keep Safari, or SafariFix's browser with --ws, in front on
+the phone."""
 import argparse
 import base64
 import json
@@ -88,7 +89,7 @@ def first_tab_ws():
         try:
             tabs = json.load(urllib.request.urlopen('http://localhost:9222/json', timeout=5))
         except OSError:
-            raise SystemExit('No inspector on localhost:9222: run tools/inspect.sh start.')
+            raise SystemExit('No inspector on localhost:9222: run tools/phone/run.sh.')
         if tabs:
             return tabs[0]['webSocketDebuggerUrl']
         time.sleep(1)

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The proxy test: builds a test app for the iPhone 5 that runs a pass-through proxy on 127.0.0.1:8118 for Safari,
 # serves its PAC file, and stays running in the background with a silent audio loop. Writes build/proxy-test.ipa,
-# unsigned; sign and install it with CleanCam's tools/plumesign.sh.
+# unsigned; sign and install it with tools/phone/plumesign.sh.
 # Runs on Linux: clang and Apple's ld64 from the theos project's iOS toolchain run in a container, against the
 # iOS 11.4 SDK, the last with 32-bit ARM. Both download once into build/legacy-tools.
 # Needs podman or docker, curl and zip.

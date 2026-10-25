@@ -2,8 +2,8 @@
 """Lets Google's sign-in run in the iPhone 5's Safari, until the SafariFix app does it: Google's sign-in script
 calls AbortController, which Safari 10.1 lacks, and fails with "Something went wrong" after the email.
 This keeps a small AbortController polyfill in Safari's open tab for 10 minutes, while the user signs in.
-  tools/iphone.sh python3 tools/google-signin.py [URL]   URL to open first (default: Google's sign-in for YouTube)
-Start the inspector first with tools/inspect.sh start, and run no other inspector client meanwhile.
+  tools/phone/iphone.sh python3 tools/google-signin.py [URL]   URL to open first (default: Google's sign-in for YouTube)
+Start the inspector first with tools/phone/run.sh, and run no other inspector client meanwhile.
 Prints the page's path each time it changes; it never reads form fields."""
 import json
 import re
