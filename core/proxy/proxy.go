@@ -53,7 +53,8 @@ type Proxy struct {
 	upgrades *http.Transport
 	logf     func(format string, args ...interface{})
 
-	// Debug, when set, serves the paths under /debug/ of the proxy's own pages, for a debug build of the app.
+	// Debug, when set, serves the paths under /debug/ of the proxy's own pages, the app's debug record, to requests
+	// that name this machine by its loopback address.
 	Debug http.Handler
 }
 
@@ -139,7 +140,7 @@ func (p *Proxy) local(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprintf(w, setupPage, html.EscapeString(p.auth.Root().Subject.CommonName))
 	default:
-		if p.Debug != nil && strings.HasPrefix(r.URL.Path, "/debug/") {
+		if p.Debug != nil && strings.HasPrefix(r.URL.Path, "/debug/") && namesLoopback(r) {
 			http.StripPrefix("/debug", p.Debug).ServeHTTP(w, r)
 			return
 		}
@@ -396,6 +397,18 @@ func markETag(h http.Header) {
 		h.Set("Etag", strings.TrimSuffix(etag, `"`)+etagMark+`"`)
 	}
 	h.Del("Last-Modified")
+}
+
+// namesLoopback reports whether r names this machine as 127.0.0.1, ::1 or localhost, as the app and the PC over USB
+// do. A website that points its own name at 127.0.0.1 reaches the proxy too, but under that name, and so can't
+// read the debug record as one of its own pages.
+func namesLoopback(r *http.Request) bool {
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return strings.EqualFold(host, "localhost") || ip != nil && ip.IsLoopback()
 }
 
 // toSelf reports whether a proxy request names the address it arrived on.

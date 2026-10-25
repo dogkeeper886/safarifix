@@ -1,6 +1,7 @@
 # Downloads the pinned tools and sources SafariFix builds from, once, into build/, checking each against a pinned
 # checksum or commit. Source it from the repo root, then call what the build needs:
 #   deps_go        Go 1.14.15, the last Go for 32-bit iPhones            sets GO
+#   deps_small_go  Go 1.14.15 reserving less address space, for the app  sets SMALL_GO
 #   deps_esbuild   esbuild v0.28.2                                        into build/src/esbuild
 #   deps_ios       the iOS 11.4 SDK and the theos project's toolchain      sets SDK and CLANG
 #   deps_npm       core-js and the IntersectionObserver, ResizeObserver polyfills, through npm in a container
@@ -9,6 +10,7 @@
 # Needs curl, git, and podman or docker for deps_npm.
 
 GO=build/go1.14.15/go/bin/go
+SMALL_GO=build/go1.14.15-small/go/bin/go
 SDK=build/legacy-tools/iPhoneOS11.4.sdk
 CLANG=build/legacy-tools/linux/iphone/bin/clang
 ROOTS=build/cacert-2026-09-25.pem
@@ -28,6 +30,27 @@ deps_fetch() {
 deps_go() {
   [[ -x $GO ]] || deps_fetch https://go.dev/dl/go1.14.15.linux-amd64.tar.gz \
     c64a57b374a81f7cf1408d2c410a28c6f142414f1ffa9d1062de1d653b0ae0d6 build/go1.14.15
+}
+
+# Go 1.14 reserves 770 MB of a 32-bit app's 2 GB as it loads: 258 MB for heap bookkeeping and 512 MB of heap, far
+# more than the core uses, and the app's web view then runs out of room. The copy reserves 4 MB and 64 MB; past
+# those, Go's heap and bookkeeping grow where the system finds room, as they already do once full.
+deps_small_go() {
+  deps_go
+  [[ -x $SMALL_GO ]] && return
+  local runtime=build/go1.14.15-small/go/src/runtime/malloc.go
+  rm -rf build/go1.14.15-small
+  mkdir -p build/go1.14.15-small
+  # Links, not copies; sed writes the one changed file anew.
+  cp -al build/go1.14.15/go build/go1.14.15-small/
+  sed -i -e 's/const arenaMetaSize = (1 << arenaBits) \* unsafe.Sizeof(heapArena{})/const arenaMetaSize = 16 * unsafe.Sizeof(heapArena{})/' \
+    -e 's/^\t\t\t512 << 20,$/\t\t\t64 << 20,/' -e 's/^\t\t\t256 << 20,$/\t\t\t32 << 20,/' \
+    -e 's/^\t\t\t128 << 20,$/\t\t\t16 << 20,/' "$runtime"
+  if [[ $(grep -cP 'arenaMetaSize = 16 \*|^\t\t\t(64|32|16) << 20,$' "$runtime") != 4 ]]; then
+    rm -rf build/go1.14.15-small
+    echo "Couldn't patch Go's reservations in $runtime." >&2
+    return 1
+  fi
 }
 
 deps_esbuild() {
