@@ -47,11 +47,13 @@ mkdir -p "$APP"
   docker.io/library/ubuntu:24.04 bash -c "
     set -e
     cd core
-    $PWD/$SMALL_GO build -buildmode=c-archive -o $PWD/$OUT/libsafarifix.a ./ios
+    # -trimpath and the linker's -S keep the builder's folders out of the app: Go's source paths and ld64's map
+    # of the object files.
+    $PWD/$SMALL_GO build -trimpath -buildmode=c-archive -o $PWD/$OUT/libsafarifix.a ./ios
     cd ..
     # The Go runtime and the core's net and crypto packages need CoreFoundation, Security and libresolv; the app's
     # setup checks need CFNetwork and Security, and the browser's page watcher JavaScriptCore.
-    ios/cc.sh -fobjc-arc -O2 -Wall $CFLAGS -I $OUT ios/app/*.m $OUT/libsafarifix.a \
+    ios/cc.sh -fobjc-arc -O2 -Wall -Wl,-S $CFLAGS -I $OUT ios/app/*.m $OUT/libsafarifix.a \
       -framework Foundation -framework UIKit -framework AVFoundation -framework QuartzCore -framework CoreGraphics \
       -framework CoreFoundation -framework CFNetwork -framework Security -framework JavaScriptCore -lresolv \
       -o $APP/SafariFix

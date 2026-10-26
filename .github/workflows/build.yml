@@ -1,0 +1,67 @@
+# Builds the unsigned IPA with ios/build.sh on each push to main and each pull request, and publishes it as the
+# release of each v* tag pushed. Standard GitHub-hosted runners are free for public repositories.
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # The SDK, toolchain, Go, esbuild, polyfills and roots that tools/deps.sh downloads at pinned checksums,
+      # about 1.3 GB unpacked.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            build/legacy-tools
+            build/go1.14.15
+            build/src
+            build/npm
+            build/gopath
+            build/cacert-*.pem
+          key: deps-${{ hashFiles('tools/deps.sh', 'core/go.sum') }}
+
+      - run: ios/build.sh
+
+      # The app must name none of the builder's folders; see the flags in ios/build.sh.
+      - name: Check the app holds no build paths
+        run: |
+          if grep -qaF "$PWD" build/safarifix-ios/Payload/SafariFix.app/SafariFix; then
+            echo "The app holds paths under $PWD." >&2
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SafariFix-ipa
+          path: build/SafariFix.ipa
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: SafariFix-ipa
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" SafariFix.ipa -R "$GITHUB_REPOSITORY" --title "SafariFix $GITHUB_REF_NAME" \
+            --notes "The unsigned SafariFix app for the iPhone 5 on iOS 10, built by [this run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID) from $GITHUB_SHA. Sign and install it with a free Apple ID as the README's \"Set up the app\" says.
+
+          SHA-256 of SafariFix.ipa: \`$(sha256sum SafariFix.ipa | cut -d' ' -f1)\`"
