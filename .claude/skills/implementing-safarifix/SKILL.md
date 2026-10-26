@@ -15,3 +15,4 @@ Implement a change in SafariFix:
 3. Call the core from `ios/app/` only through `OnCore` in `ios/app/main.m`, whose thread never runs JavaScript, since JavaScript's collector crashes the app when it scans a thread mid-way through a Go call.
 4. Test the core with `core/go.sh test ./...`, on 32 bits with `GOARCH=386 CGO_ENABLED=0 core/go.sh test ./certs ./fix ./proxy ./rules`, and with `core/go.sh vet ./...`.
 5. Put the IPA on the phone and see what the change did there with the phone tools in `tools/phone/`, by the `using-phone-tools` skill.
+6. Release by pushing a `v*` tag on main, never by uploading a PC's build: the Build workflow in `.github/workflows/build.yml` builds the IPA and publishes it as the tag's release.
