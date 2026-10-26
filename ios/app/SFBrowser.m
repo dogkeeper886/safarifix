@@ -278,9 +278,8 @@ void SFBrowserStart(int port, NSData *root) {
     [NSURLProtocol registerClass:[SFCoreProtocol class]];
 }
 
-static UIButton *BarButton(NSString *title, CGFloat size, CGRect frame, id target, SEL action) {
+static UIButton *BarButton(NSString *title, CGFloat size, id target, SEL action) {
     UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
-    button.frame = frame;
     button.titleLabel.font = [UIFont systemFontOfSize:size];
     [button setTitle:title forState:UIControlStateNormal];
     [button addTarget:target action:action forControlEvents:UIControlEventTouchUpInside];
@@ -293,7 +292,7 @@ static UIButton *BarButton(NSString *title, CGFloat size, CGRect frame, id targe
 @implementation SFBrowserViewController {
     UIWebView *_web;
     UITextField *_address;
-    UIButton *_back;
+    UIButton *_done, *_back, *_debug;
     // The page the browser let go of in the background, to open again when it shows.
     NSURL *_unloaded;
     NSTimer *_unloadTimer;
@@ -302,13 +301,13 @@ static UIButton *BarButton(NSString *title, CGFloat size, CGRect frame, id targe
 - (void)loadView {
     UIView *view = [[UIView alloc] initWithFrame:[UIScreen mainScreen].bounds];
     view.backgroundColor = [UIColor colorWithRed:0.97 green:0.97 blue:0.97 alpha:1];
-    CGFloat width = view.bounds.size.width;
-    [view addSubview:BarButton(@"Done", 15, CGRectMake(4, 24, 46, 32), self, @selector(done))];
-    _back = BarButton(@"‹", 28, CGRectMake(50, 24, 28, 32), self, @selector(goBack));
+    _done = BarButton(@"Done", 15, self, @selector(done));
+    [view addSubview:_done];
+    _back = BarButton(@"‹", 28, self, @selector(goBack));
     _back.enabled = NO;
     [view addSubview:_back];
 
-    _address = [[UITextField alloc] initWithFrame:CGRectMake(80, 24, width - 140, 32)];
+    _address = [UITextField new];
     _address.borderStyle = UITextBorderStyleRoundedRect;
     _address.font = [UIFont systemFontOfSize:15];
     _address.placeholder = @"Search or enter website";
@@ -320,7 +319,8 @@ static UIButton *BarButton(NSString *title, CGFloat size, CGRect frame, id targe
     _address.delegate = self;
     [view addSubview:_address];
 
-    [view addSubview:BarButton(@"Debug", 15, CGRectMake(width - 58, 24, 54, 32), self, @selector(showDetails))];
+    _debug = BarButton(@"Debug", 15, self, @selector(showDetails));
+    [view addSubview:_debug];
     self.view = view;
     [self makeWebView];
 
@@ -334,14 +334,26 @@ static UIButton *BarButton(NSString *title, CGFloat size, CGRect frame, id targe
 }
 
 - (void)makeWebView {
-    CGSize size = self.view.bounds.size;
-    _web = [[UIWebView alloc] initWithFrame:CGRectMake(0, 62, size.width, size.height - 62)];
-    _web.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    _web = [UIWebView new];
     _web.scalesPageToFit = YES;
     _web.allowsInlineMediaPlayback = YES;
     _web.delegate = self;
     [self.view addSubview:_web];
+    [self.view setNeedsLayout];
     WatchWebKit(_web);
+}
+
+/// Lays out the bar and the page for the phone's orientation. iOS hides the status bar in landscape, and the bar
+/// moves up into its place.
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    CGSize size = self.view.bounds.size;
+    CGFloat top = self.topLayoutGuide.length + 4;
+    _done.frame = CGRectMake(4, top, 46, 32);
+    _back.frame = CGRectMake(50, top, 28, 32);
+    _address.frame = CGRectMake(80, top, size.width - 140, 32);
+    _debug.frame = CGRectMake(size.width - 58, top, 54, 32);
+    _web.frame = CGRectMake(0, top + 38, size.width, size.height - top - 38);
 }
 
 - (void)viewWillAppear:(BOOL)animated {
