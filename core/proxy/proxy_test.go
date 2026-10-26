@@ -87,13 +87,13 @@ func TestFixesAPageThroughTheProxy(t *testing.T) {
 	defer done()
 
 	resp, body := get(t, client, site.URL+"/", nil)
-	if !strings.HasPrefix(body, `<html><head><script src="`+fix.PolyfillPath+`">`) || strings.Contains(body, "?.") {
+	if !strings.HasPrefix(body, `<html><head><script src="`+fix.PolyfillPath+`?v=`) || strings.Contains(body, "?.") {
 		t.Errorf("page not fixed: %s", body)
 	}
 	if resp.Header.Get("Content-Security-Policy") != "" {
 		t.Error("the CSP header would block the rewritten scripts")
 	}
-	if _, polyfills := get(t, client, site.URL+fix.PolyfillPath, nil); !strings.Contains(polyfills, "AbortController") {
+	if _, polyfills := get(t, client, site.URL+fix.PolyfillPath+"?v=1", nil); !strings.Contains(polyfills, "AbortController") {
 		t.Error("the polyfills aren't served on the site's own host")
 	}
 	if s := p.Stats(); s.Decrypted == 0 || s.Failures != 0 {

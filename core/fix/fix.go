@@ -120,7 +120,7 @@ func (f *Fixer) Page(html []byte, what string) []byte {
 	}
 	out.Write(html[last:])
 	html = scriptOrLink.ReplaceAllFunc(out.Bytes(), func(tag []byte) []byte { return integrity.ReplaceAll(tag, nil) })
-	return insertAtHead(html, []byte(`<script src="`+PolyfillPath+`"></script>`))
+	return insertAtHead(html, polyfillTag)
 }
 
 // SignInPage adds the AbortController polyfill to one of Google's sign-in pages, under the nonce of the page's
@@ -135,10 +135,18 @@ func SignInPage(html []byte) []byte {
 }
 
 // Polyfills returns the polyfills served at PolyfillPath: core-js, IntersectionObserver, ResizeObserver,
-// the performance stand-ins and AbortController.
+// the performance stand-ins, Element.toggleAttribute and AbortController.
 func Polyfills() []byte { return allPolyfills }
 
-var allPolyfills = bytes.Join([][]byte{[]byte(vendorPolyfills), []byte(performance), []byte(abortController)}, []byte("\n;\n"))
+var allPolyfills = bytes.Join([][]byte{[]byte(vendorPolyfills), []byte(performance), []byte(toggleAttribute),
+	[]byte(abortController)}, []byte("\n;\n"))
+
+// polyfillTag loads the polyfills by a URL that names their hash: the proxy lets a browser keep them for a day,
+// and a new set then reaches the pages at once.
+var polyfillTag = func() []byte {
+	sum := sha256.Sum256(allPolyfills)
+	return []byte(`<script src="` + PolyfillPath + "?v=" + hex.EncodeToString(sum[:4]) + `"></script>`)
+}()
 
 func isJavaScript(attrs []byte) bool {
 	if hasSrc.Match(attrs) {
