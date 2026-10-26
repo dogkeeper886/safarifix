@@ -13,7 +13,11 @@ The app runs the proxy on `127.0.0.1:8118`, and Safari reaches it through a PAC 
 1. **Set up the PC** with `tools/phone/install.sh`, which needs podman or docker, usbmuxd, curl and tar. It downloads the pinned signer into `build/`, builds the phone tools' container image, and names what's left. Run it again until it says "Ready".
    - **The iPhone:** plug it straight into the PC, since usbmuxd lists the phone only on a direct cable, then unlock it and tap "Trust This Computer".
    - **An Apple ID:** log in once, in your own terminal, with `tools/phone/plumesign.sh account login -u <your Apple ID>`; it asks for the password and the code.
-2. **Build the IPA** on the Linux PC with `ios/build.sh`, which writes `build/SafariFix.ipa`. It needs podman or docker, curl, git, zip and python3, and downloads its pinned Go, esbuild, SDK, toolchain and polyfills into `build/` on the first run.
+2. **Get the IPA:** download the latest release's unsigned IPA into `build/`:
+   ```sh
+   curl -fL --create-dirs -o build/SafariFix.ipa https://github.com/dogkeeper886/safarifix/releases/latest/download/SafariFix.ipa
+   ```
+   Or build it on the Linux PC with `ios/build.sh`, which writes the same file. The build needs podman or docker, curl, git, zip and python3, and downloads its pinned Go, esbuild, SDK, toolchain and polyfills into `build/` on the first run.
 3. **Sign and install** it from this repo's root:
    ```sh
    tools/phone/plumesign.sh sign --package build/SafariFix.ipa --apple-id --register-and-install \
