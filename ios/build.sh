@@ -13,8 +13,9 @@ source tools/deps.sh
 deps_small_go
 deps_esbuild
 deps_ios
-# Generates the polyfills and the root bundle the core embeds.
-core/go.sh version >/dev/null
+# Generates the polyfills and the root bundle the core embeds, and downloads the core's modules into build/: the
+# build's container has no network, and its plain Ubuntu has no root certificates to fetch them with.
+core/go.sh mod download
 
 OUT=build/safarifix-ios
 APP=$OUT/Payload/SafariFix.app
@@ -39,7 +40,7 @@ fi
 rm -rf "$OUT" "$IPA"
 mkdir -p "$APP"
 # The toolchain's bin comes first on PATH so Go packs the library with its Mach-O ar.
-"$RUNTIME" run --rm --security-opt label=disable "${USER_OPTS[@]}" -v "$PWD:$PWD" -w "$PWD" \
+"$RUNTIME" run --rm --network none --security-opt label=disable "${USER_OPTS[@]}" -v "$PWD:$PWD" -w "$PWD" \
   -e HOME=/tmp -e GOPATH -e GOCACHE -e GOFLAGS \
   -e GOOS=darwin -e GOARCH=arm -e GOARM=7 -e CGO_ENABLED=1 \
   -e CC="$PWD/ios/cc.sh" -e CLANG="$PWD/$CLANG" -e SDK="$PWD/$SDK" \
