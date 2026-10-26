@@ -1,5 +1,5 @@
-// Package fix rewrites pages for Safari 10.1: scripts to the syntax iOS 10.3 reads, and polyfills for the web
-// APIs it lacks.
+// Package fix rewrites pages for Safari 10.1: scripts to the syntax iOS 10.3 reads, stylesheets to the CSS it reads,
+// and polyfills for the web APIs it lacks.
 package fix
 
 import (
@@ -23,6 +23,7 @@ const PolyfillPath = "/__safarifix/polyfills.js"
 
 var (
 	inlineScript = regexp.MustCompile(`(?is)<script\b([^>]*)>(.*?)</script>`)
+	inlineStyle  = regexp.MustCompile(`(?is)<style\b[^>]*>(.*?)</style>`)
 	scriptType   = regexp.MustCompile(`(?i)\btype\s*=\s*["']?([^"'\s>]+)`)
 	hasSrc       = regexp.MustCompile(`(?i)\bsrc\s*=`)
 	scriptOrLink = regexp.MustCompile(`(?i)<(?:script|link)\b[^>]*>`)
@@ -67,7 +68,7 @@ func (f *Fixer) Script(code []byte, what string) []byte {
 	start := time.Now()
 	result := api.Transform(string(code), api.TransformOptions{
 		Loader:  api.LoaderJS,
-		Engines: []api.Engine{{Name: api.EngineIOS, Version: "10.3"}},
+		Engines: ios10,
 		// esbuild can't lower let, const or the destructuring inside them for iOS 10, and refuses the target
 		// for them; Safari 10.1 runs all three, so keep them as they are.
 		Supported:        map[string]bool{"const-and-let": true, "destructuring": true},
@@ -89,10 +90,37 @@ func (f *Fixer) Script(code []byte, what string) []byte {
 	return result.Code
 }
 
-// Page rewrites an HTML page from a fixed host: its inline scripts, the integrity hashes and CSP meta tags the
-// rewritten scripts would fail, and a script tag for the polyfills at the top. The caller drops the CSP headers.
+var ios10 = []api.Engine{{Name: api.EngineIOS, Version: "10.3"}}
+
+// Stylesheet returns css in what Safari 10.1 reads.
+func (f *Fixer) Stylesheet(css []byte, what string) []byte {
+	start := time.Now()
+	out := f.stylesheet(css)
+	f.logf("css %s: %d -> %d B in %d ms", what, len(css), len(out), time.Since(start).Milliseconds())
+	return out
+}
+
+// stylesheet rewrites css, after esbuild flattens its nested rules, if any.
+func (f *Fixer) stylesheet(css []byte) []byte {
+	out, nested := stylesheet(string(css))
+	if nested {
+		f.limit <- struct{}{}
+		result := api.Transform(string(css), api.TransformOptions{
+			Loader: api.LoaderCSS, Engines: ios10, LogLevel: api.LogLevelSilent,
+		})
+		<-f.limit
+		if len(result.Errors) == 0 {
+			out, _ = stylesheet(string(result.Code))
+		}
+	}
+	return []byte(out)
+}
+
+// Page rewrites an HTML page from a fixed host: its inline scripts and stylesheets, the integrity hashes and CSP meta
+// tags the rewritten scripts would fail, and a script tag for the polyfills at the top. The caller drops the CSP
+// headers.
 func (f *Fixer) Page(html []byte, what string) []byte {
-	html = metaCSP.ReplaceAll(html, nil)
+	html = f.styles(metaCSP.ReplaceAll(html, nil))
 	matches := inlineScript.FindAllSubmatchIndex(html, -1)
 	bodies := make([][]byte, len(matches))
 	var wg sync.WaitGroup
@@ -120,7 +148,7 @@ func (f *Fixer) Page(html []byte, what string) []byte {
 	}
 	out.Write(html[last:])
 	html = scriptOrLink.ReplaceAllFunc(out.Bytes(), func(tag []byte) []byte { return integrity.ReplaceAll(tag, nil) })
-	return insertAtHead(html, []byte(`<script src="`+PolyfillPath+`"></script>`))
+	return insertAtHead(html, polyfillTag)
 }
 
 // SignInPage adds the AbortController polyfill to one of Google's sign-in pages, under the nonce of the page's
@@ -135,10 +163,44 @@ func SignInPage(html []byte) []byte {
 }
 
 // Polyfills returns the polyfills served at PolyfillPath: core-js, IntersectionObserver, ResizeObserver,
-// the performance stand-ins and AbortController.
+// the performance stand-ins, Element.toggleAttribute and AbortController.
 func Polyfills() []byte { return allPolyfills }
 
-var allPolyfills = bytes.Join([][]byte{[]byte(vendorPolyfills), []byte(performance), []byte(abortController)}, []byte("\n;\n"))
+var allPolyfills = bytes.Join([][]byte{[]byte(vendorPolyfills), []byte(performance), []byte(toggleAttribute),
+	[]byte(abortController)}, []byte("\n;\n"))
+
+// polyfillTag loads the polyfills by a URL that names their hash: the proxy lets a browser keep them for a day,
+// and a new set then reaches the pages at once.
+var polyfillTag = func() []byte {
+	sum := sha256.Sum256(allPolyfills)
+	return []byte(`<script src="` + PolyfillPath + "?v=" + hex.EncodeToString(sum[:4]) + `"></script>`)
+}()
+
+// styles rewrites a page's <style> blocks, but not one a script writes.
+func (f *Fixer) styles(html []byte) []byte {
+	scripts := inlineScript.FindAllIndex(html, -1)
+	var out bytes.Buffer
+	last := 0
+	for _, m := range inlineStyle.FindAllSubmatchIndex(html, -1) {
+		if inside(m[0], scripts) {
+			continue
+		}
+		out.Write(html[last:m[2]])
+		out.Write(f.stylesheet(html[m[2]:m[3]]))
+		last = m[3]
+	}
+	out.Write(html[last:])
+	return out.Bytes()
+}
+
+func inside(i int, ranges [][]int) bool {
+	for _, r := range ranges {
+		if r[0] <= i && i < r[1] {
+			return true
+		}
+	}
+	return false
+}
 
 func isJavaScript(attrs []byte) bool {
 	if hasSrc.Match(attrs) {

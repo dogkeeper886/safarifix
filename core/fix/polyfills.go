@@ -24,6 +24,20 @@ const performance = `(function () {
   });
 })();`
 
+// toggleAttribute adds Element.toggleAttribute, which Safari 10.1 lacks: ollama.com's header calls it as the page
+// scrolls, and throws a TypeError without it.
+const toggleAttribute = `(function () {
+  var proto = window.Element && Element.prototype;
+  if (!proto || proto.toggleAttribute) return;
+  Object.defineProperty(proto, 'toggleAttribute', { configurable: true, writable: true, value: function (name, force) {
+    var has = this.hasAttribute(name);
+    var on = force === undefined ? !has : !!force;
+    if (on && !has) this.setAttribute(name, '');
+    if (!on && has) this.removeAttribute(name);
+    return on;
+  } });
+})();`
+
 // abortController adds AbortController and AbortSignal, which Safari 10.1 lacks: Google's sign-in script calls
 // them and fails with "Something went wrong" without them. Aborting can't cancel Safari's own fetch, which
 // ignores the signal; it only tells the page's listeners.

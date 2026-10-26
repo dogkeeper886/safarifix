@@ -53,7 +53,7 @@ func TestPage(t *testing.T) {
 		`<script src="/app.js" integrity="sha384-abc" nonce="n1"></script>` +
 		`<script>var x = a?.b;</script><script type="application/ld+json">{"a": 1}</script></head><body></body></html>`
 	out := string(f.Page([]byte(html), "test"))
-	if !strings.HasPrefix(out, `<html><head><script src="`+PolyfillPath+`"></script>`) {
+	if !strings.HasPrefix(out, `<html><head><script src="`+PolyfillPath+`?v=`) {
 		t.Errorf("polyfills not first in the head: %s", out)
 	}
 	for _, gone := range []string{"Content-Security-Policy", "integrity=", "nonce=", "a?.b"} {
@@ -76,7 +76,8 @@ func TestSignInPageUsesThePageNonce(t *testing.T) {
 
 func TestPolyfillsIncludeEveryPart(t *testing.T) {
 	all := string(Polyfills())
-	for _, part := range []string{"core-js", "IntersectionObserver", "ResizeObserver", "PerformanceObserver", "AbortController"} {
+	for _, part := range []string{"core-js", "IntersectionObserver", "ResizeObserver", "PerformanceObserver", "toggleAttribute",
+		"AbortController"} {
 		if !strings.Contains(all, part) {
 			t.Errorf("polyfills lack %s", part)
 		}
