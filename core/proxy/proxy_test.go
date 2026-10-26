@@ -62,6 +62,9 @@ func website() *httptest.Server {
 				return
 			}
 			w.Write([]byte(`const o = {...p};`))
+		case "/app.css":
+			w.Header().Set("Content-Type", "text/css")
+			w.Write([]byte(`@layer base{.x{inset:0}}`))
 		}
 	}))
 }
@@ -95,6 +98,9 @@ func TestFixesAPageThroughTheProxy(t *testing.T) {
 	}
 	if _, polyfills := get(t, client, site.URL+fix.PolyfillPath+"?v=1", nil); !strings.Contains(polyfills, "AbortController") {
 		t.Error("the polyfills aren't served on the site's own host")
+	}
+	if _, css := get(t, client, site.URL+"/app.css", nil); css != ".x{top:0;right:0;bottom:0;left:0;}" {
+		t.Errorf("stylesheet not fixed: %s", css)
 	}
 	if s := p.Stats(); s.Decrypted == 0 || s.Failures != 0 {
 		t.Errorf("stats: %+v", s)

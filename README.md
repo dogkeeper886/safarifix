@@ -1,12 +1,12 @@
 # SafariFix
 
-An iPhone 5 stops at iOS 10.3.4, and its Safari 10.1 still searches Google and plays YouTube. Many other sites now send JavaScript newer than Safari 10.1 can parse, or call web APIs it lacks. Their pages stay blank or half-working, and Safari 10.1 is the phone's last Safari.
+An iPhone 5 stops at iOS 10.3.4, and its Safari 10.1 still searches Google and plays YouTube. Many other sites now send JavaScript newer than Safari 10.1 can parse, call web APIs it lacks, or style their pages with CSS it drops. Their pages stay blank or half-working, and Safari 10.1 is the phone's last Safari.
 
 SafariFix fixes each page on its way to the browser: a proxy rewrites the new syntax into what Safari 10.1 reads, adds the missing APIs, and passes Google, YouTube and Apple through untouched. The SafariFix app runs the proxy on the phone, with no PC, for its own browser and for Safari; a free Apple ID signs it, as it signs [CleanCam](https://github.com/dogkeeper886/cleancam). A test bench on a Linux PC and two test apps came first.
 
 ## The SafariFix app
 
-The app runs the proxy on `127.0.0.1:8118`, and Safari reaches it through a PAC file. The proxy, `core/`, is in Go 1.14, the last Go for 32-bit iPhones, and links into the app as a C library; `ios/app/` wraps it in an Objective-C app that plays a silent sound to keep running behind Safari. It passes Google search, YouTube and Apple's services through untouched, adds only `AbortController` to Google's sign-in pages, and rewrites every other site's scripts with esbuild on the phone. The app also has a browser of its own, which uses the same proxy from the first launch. The app records what each page did, for debugging.
+The app runs the proxy on `127.0.0.1:8118`, and Safari reaches it through a PAC file. The proxy, `core/`, is in Go 1.14, the last Go for 32-bit iPhones, and links into the app as a C library; `ios/app/` wraps it in an Objective-C app that plays a silent sound to keep running behind Safari. It passes Google search, YouTube and Apple's services through untouched, adds only `AbortController` to Google's sign-in pages, and rewrites every other site's scripts with esbuild on the phone, along with their stylesheets, whose Tailwind CSS v4 layers, `:where()` selectors and `oklch()` colors Safari 10.1 would drop. The app also has a browser of its own, which uses the same proxy from the first launch. The app records what each page did, for debugging.
 
 ### Set up the app
 

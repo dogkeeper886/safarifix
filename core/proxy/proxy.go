@@ -311,6 +311,8 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, scheme, hostport
 		}
 	case mode == rules.Fix && isJavaScript(ctype, r.URL.Path):
 		rewrite = func(b []byte) []byte { return p.fixer.Script(b, what) }
+	case mode == rules.Fix && strings.Contains(ctype, "text/css"):
+		rewrite = func(b []byte) []byte { return p.fixer.Stylesheet(b, what) }
 	case mode == rules.SignIn && strings.Contains(ctype, "text/html"):
 		rewrite = fix.SignInPage
 	}
@@ -359,9 +361,10 @@ func (p *Proxy) switchProtocols(w http.ResponseWriter, resp *http.Response) {
 	pipe(&prefixConn{Conn: conn, r: io.MultiReader(buffered.Reader, conn)}, rwConn{server})
 }
 
-// revalidateFixedCopiesOnly keeps Safari from revalidating an unfixed page or script it cached before SafariFix ran:
-// a 304 would keep it. A request that names a marked ETag revalidates SafariFix's own copy and goes ahead with
-// the website's ETag; a page or script request with any other condition loses its conditions and gets a fresh copy.
+// revalidateFixedCopiesOnly keeps Safari from revalidating an unfixed page, script or stylesheet it cached before
+// SafariFix ran, or before SafariFix rewrote it: a 304 would keep it. A request that names a marked ETag revalidates
+// SafariFix's own copy and goes ahead with the website's ETag; a request for one with any other condition loses its
+// conditions and gets a fresh copy.
 // It returns whether r revalidates SafariFix's own copy.
 func revalidateFixedCopiesOnly(r *http.Request) bool {
 	if inm := r.Header.Get("If-None-Match"); strings.Contains(inm, etagMark) {
@@ -376,13 +379,13 @@ func revalidateFixedCopiesOnly(r *http.Request) bool {
 	return false
 }
 
-// mayBeRewritten guesses from the request alone whether its answer is a page or a script.
+// mayBeRewritten guesses from the request alone whether its answer is a page, a script or a stylesheet.
 func mayBeRewritten(r *http.Request) bool {
 	path := strings.ToLower(r.URL.Path)
-	if strings.Contains(r.Header.Get("Accept"), "text/html") {
+	if accept := r.Header.Get("Accept"); strings.Contains(accept, "text/html") || strings.Contains(accept, "text/css") {
 		return true
 	}
-	for _, ext := range []string{".js", ".mjs", ".html", ".htm"} {
+	for _, ext := range []string{".js", ".mjs", ".html", ".htm", ".css"} {
 		if strings.HasSuffix(path, ext) {
 			return true
 		}
